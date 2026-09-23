@@ -1,4 +1,4 @@
-# xmip-core-net
+# xmip-core-library-net
 
 Network primitives the capabilities share. What an address means to a gate
 is the gate's; how it is written and read is here.

@@ -2,11 +2,11 @@
 [workspace]
 
 [package]
-name = "xmip-core-net"
+name = "xmip-core-library-net"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/IlleNilsson/xmip-core-net"
+repository = "https://github.com/IlleNilsson/xmip-core-library-net"
 description = "Network primitives for Xmip: addresses, prefixes, and the peer's name for them."
 
 [lib]
