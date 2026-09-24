@@ -7,10 +7,14 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/IlleNilsson/xmip-core-library-net"
-description = "Network primitives for Xmip: addresses, prefixes, and the peer's name for them."
+description = "Network primitives for Xmip: addresses, authorities, prefixes, MAC notation, percent-encoding, the peer's name for its address, and the minimal HTTP/1.1 client."
 
 [lib]
 path = "src/lib.rs"
+
+[dependencies]
+# Hex, which a MAC address and a percent escape are both spelled in.
+codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
 
 [lints.rust]
 # forbid, not deny: a module has no business writing unsafe. The one exception
