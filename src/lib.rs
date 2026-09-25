@@ -4,9 +4,10 @@
 //! as a transport writes it ([`address`]), an authority as a URI writes it
 //! ([`authority`]), a network in prefix notation ([`Network`]), a hardware
 //! address in IEEE 802 notation ([`mac`]), percent-encoding ([`percent`]),
-//! a filesystem path as a URI's path ([`uri`]), and the minimal HTTP/1.1
-//! client a capability asks a service beside it with ([`http`], over an
-//! [`Endpoint`]).
+//! a filesystem path as a URI's path ([`uri`]), a head as the
+//! line-oriented protocols write it ([`head`]), and HTTP/1.1 on the wire,
+//! both halves, with the exchange of a request for its answer ([`http`],
+//! to an [`Endpoint`]).
 //!
 //! Until 2026-09-22 identification and authorization each carried a network
 //! type, and authorization read the peer's address under `address` while
@@ -15,11 +16,14 @@
 //! `context::property::PEER_ADDRESS` since 2026-09-24, below every layer that
 //! writes or reads it. Until 2026-09-24 the authority, the
 //! MAC notation, percent-encoding and the HTTP client were each written
-//! three or four times.
+//! three or four times. Until 2026-09-25 the http transport carried a
+//! second HTTP/1.1 codec and a second URL reader, and the transport
+//! capability the head reader.
 
 pub mod address;
 pub mod authority;
 mod endpoint;
+pub mod head;
 pub mod http;
 pub mod mac;
 mod network;

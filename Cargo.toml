@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/IlleNilsson/xmip-core-library-net"
-description = "Network primitives for Xmip: addresses, authorities, prefixes, MAC notation, percent-encoding, the peer's name for its address, and the minimal HTTP/1.1 client."
+description = "Network primitives for Xmip: addresses, authorities, prefixes, MAC notation, percent-encoding, the head the line-oriented protocols write, the URL of an HTTP endpoint, and HTTP/1.1 on the wire, both halves."
 
 [lib]
 path = "src/lib.rs"
