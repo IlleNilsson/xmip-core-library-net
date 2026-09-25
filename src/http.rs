@@ -17,6 +17,11 @@
 //! `WebDAV` and the rest. No TLS, no redirects, no connection pool: the
 //! caller opens the connection, and the http transport is where HTTPS is.
 //!
+//! The [`Request`] and [`Response`] are HTTP's, not this version's:
+//! [`crate::http2`] carries the same two over HTTP/2, trailers included,
+//! and [`Version`] names which a connection speaks — what TLS agreed by
+//! ALPN, or what a cleartext connection was told beforehand.
+//!
 //! One copy. Until 2026-09-24 the Open Policy Agent client, the OAuth 2.0
 //! introspection client and the Redpanda Admin API client each wrote the
 //! request line and read the status by hand; until 2026-09-25 the http
@@ -24,7 +29,6 @@
 //! which refused a chunked answer this one read, and a third to send a
 //! Stream.
 
-use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
@@ -32,8 +36,13 @@ use std::time::Duration;
 use crate::NetError;
 use crate::head::read_head;
 use crate::percent::{decode, encode};
+use message::{Message, write_message};
 
 mod body;
+mod message;
+mod version;
+
+pub use version::Version;
 
 /// The largest body read, whether framed by its length, its chunks or the
 /// connection's end.
@@ -121,10 +130,13 @@ impl Request {
 pub struct Response {
     pub status: u16,
     /// The phrase after the status, as the server wrote it:
-    /// `Unauthorized`.
+    /// `Unauthorized`. HTTP/2 carries none, and [`reason`] fills it.
     pub reason: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    /// The fields after the body: HTTP/2's trailing `HEADERS`, or the
+    /// trailer of a chunked HTTP/1.1 answer — where gRPC puts its status.
+    pub trailers: Vec<(String, String)>,
 }
 
 impl Response {
@@ -152,10 +164,23 @@ impl Response {
         self
     }
 
+    /// With one more trailer field.
+    #[must_use]
+    pub fn trailer(mut self, name: &str, value: &str) -> Self {
+        self.trailers.push((name.to_string(), value.to_string()));
+        self
+    }
+
     /// One header's value, however it was capitalised.
     #[must_use]
     pub fn header_value(&self, name: &str) -> Option<&str> {
         find(&self.headers, name)
+    }
+
+    /// One trailer field's value, however it was capitalised.
+    #[must_use]
+    pub fn trailer_value(&self, name: &str) -> Option<&str> {
+        find(&self.trailers, name)
     }
 
     /// The body as text, lossily.
@@ -210,16 +235,17 @@ pub fn exchange<S: Read + Write>(mut stream: S, request: &Request) -> Result<Res
 /// Where the connection broke.
 pub fn write_request(writer: &mut impl Write, request: &Request) -> Result<(), NetError> {
     let first = format!("{} {} HTTP/1.1", request.method, request.target());
-    write_message(
-        writer,
-        &first,
-        &request.headers,
-        &request.body,
-        "the request",
-    )
+    let message = Message {
+        first: &first,
+        headers: &request.headers,
+        body: &request.body,
+        trailers: &[],
+    };
+    write_message(writer, &message, "the request")
 }
 
-/// Write `response`, flushed, as [`write_request`] writes a request.
+/// Write `response`, flushed, as [`write_request`] writes a request; an
+/// answer with trailers goes chunked, the trailer after its last chunk.
 ///
 /// # Errors
 ///
@@ -231,13 +257,13 @@ pub fn write_response(writer: &mut impl Write, response: &Response) -> Result<()
         &response.reason
     };
     let first = format!("HTTP/1.1 {} {phrase}", response.status);
-    write_message(
-        writer,
-        &first,
-        &response.headers,
-        &response.body,
-        "the answer",
-    )
+    let message = Message {
+        first: &first,
+        headers: &response.headers,
+        body: &response.body,
+        trailers: &response.trailers,
+    };
+    write_message(writer, &message, "the answer")
 }
 
 /// Read one answer.
@@ -263,16 +289,17 @@ pub fn read_response(reader: &mut impl BufRead) -> Result<Response, NetError> {
         .and_then(|code| code.parse::<u16>().ok())
         .ok_or_else(not_http)?;
     let bodiless = status < 200 || status == 204 || status == 304;
-    let body = if bodiless {
-        Vec::new()
+    let (body, trailer) = if bodiless {
+        (Vec::new(), Vec::new())
     } else {
         body::read(reader, &head, true)?
     };
     Ok(Response {
         status,
         reason: words.next().unwrap_or_default().to_string(),
-        headers: headers_of(&head),
+        headers: headers_of(&head[1..]),
         body,
+        trailers: headers_of(&trailer),
     })
 }
 
@@ -294,6 +321,21 @@ pub fn read_request(reader: &mut impl BufRead) -> Result<Option<Request>, NetErr
             "a request line Xmip cannot read: {line}"
         )));
     };
+    let (path, query) = split_target(target);
+    let (body, _) = body::read(reader, &head, false)?;
+    Ok(Some(Request {
+        method: method.to_string(),
+        path,
+        query,
+        headers: headers_of(&head[1..]),
+        body,
+    }))
+}
+
+/// A request target as its path, still encoded, and its query decoded —
+/// what the request line carries in HTTP/1.1 and `:path` in HTTP/2.
+#[must_use]
+pub fn split_target(target: &str) -> (String, Vec<(String, String)>) {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let query = query
         .split('&')
@@ -303,14 +345,7 @@ pub fn read_request(reader: &mut impl BufRead) -> Result<Option<Request>, NetErr
             (decode(name), decode(value))
         })
         .collect();
-    let body = body::read(reader, &head, false)?;
-    Ok(Some(Request {
-        method: method.to_string(),
-        path: path.to_string(),
-        query,
-        headers: headers_of(&head),
-        body,
-    }))
+    (path.to_string(), query)
 }
 
 /// The phrase a status is written with; one the table does not know is
@@ -339,45 +374,16 @@ pub const fn reason(status: u16) -> &'static str {
     }
 }
 
-/// One message: its first line, its headers, the length, the connection
-/// closing unless a header says otherwise, the blank line and the body.
-fn write_message(
-    writer: &mut impl Write,
-    first: &str,
-    headers: &[(String, String)],
-    body: &[u8],
-    what: &str,
-) -> Result<(), NetError> {
-    let lines = headers
+/// Header lines as names and values.
+fn headers_of(lines: &[String]) -> Vec<(String, String)> {
+    lines
         .iter()
-        .fold(String::new(), |mut lines, (name, value)| {
-            let _ = write!(lines, "{name}: {value}\r\n");
-            lines
-        });
-    let close = if find(headers, "connection").is_none() {
-        "Connection: close\r\n"
-    } else {
-        ""
-    };
-    let head = format!(
-        "{first}\r\n{lines}Content-Length: {}\r\n{close}\r\n",
-        body.len()
-    );
-    writer
-        .write_all(head.as_bytes())
-        .and_then(|()| writer.write_all(body))
-        .and_then(|()| writer.flush())
-        .map_err(|failed| NetError::from_io(&format!("writing {what}"), &failed))
-}
-
-fn headers_of(head: &[String]) -> Vec<(String, String)> {
-    head.iter()
-        .skip(1)
         .filter_map(|line| line.split_once(':'))
         .map(|(name, value)| (name.trim().to_string(), value.trim().to_string()))
         .collect()
 }
 
+/// One header's value, however the peer capitalised it.
 fn find<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     headers
         .iter()
@@ -543,6 +549,27 @@ mod tests {
         for bytes in refused {
             assert!(answer(bytes).is_err(), "{}", String::from_utf8_lossy(bytes));
         }
+    }
+
+    #[test]
+    fn an_answer_with_trailers_goes_chunked_and_reads_back_with_them() {
+        for body in [&b"abc"[..], b""] {
+            let sent = Response::new(200).body(body).trailer("grpc-status", "0");
+            let mut written = Vec::new();
+            write_response(&mut written, &sent).expect("written");
+            let text = String::from_utf8_lossy(&written).into_owned();
+            assert!(text.contains("Transfer-Encoding: chunked\r\n"), "{text}");
+            assert!(!text.contains("Content-Length"), "{text}");
+            let back = answer(&written).expect("read");
+            assert_eq!(back.body, body);
+            assert_eq!(back.trailer_value("GRPC-Status"), Some("0"));
+        }
+        assert!(
+            answer(b"HTTP/1.1 200 OK\r\n\r\n")
+                .expect("read")
+                .trailers
+                .is_empty()
+        );
     }
 
     #[test]
