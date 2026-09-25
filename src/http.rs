@@ -1,45 +1,139 @@
-//! The minimal HTTP/1.1 client: one request over one connection,
-//! `Connection: close`, and the answer read to its end — framed by
-//! `Content-Length`, chunked, or ended by the close.
+//! HTTP/1.1 on the wire, both halves: a request and its answer, written and
+//! read, and the one exchange of a request for its answer over whatever
+//! connection it is handed — a plain socket, or one the caller wrapped in
+//! TLS.
+//!
+//! A message is `Content-Length` framed as it is written, and closes its
+//! connection unless it names its own `Connection` — `WebDAV` keeps its
+//! connection for the next method, and says `keep-alive` on both sides. An
+//! answer is read by its length, its chunks or its end; a 1xx, a 204 or a
+//! 304 has no body at all. Both halves are here so the two cannot drift: a
+//! header written one way is read the same way.
 //!
 //! What a capability needs to ask a service beside it — an Open Policy
 //! Agent, an authorization server's introspection endpoint, a broker's
-//! administration API — and nothing more: no TLS, no redirects, no
-//! connection reuse. Moving a Stream over HTTP is the http transport's
-//! work, not this.
+//! administration API — and what every technology riding on HTTP writes and
+//! reads underneath its signature: S3, Azure Blob, Cloud Storage, AS2, AS4,
+//! `WebDAV` and the rest. No TLS, no redirects, no connection pool: the
+//! caller opens the connection, and the http transport is where HTTPS is.
 //!
 //! One copy. Until 2026-09-24 the Open Policy Agent client, the OAuth 2.0
 //! introspection client and the Redpanda Admin API client each wrote the
-//! request line and read the status by hand, and only two of them read a
-//! chunked answer.
+//! request line and read the status by hand; until 2026-09-25 the http
+//! transport carried a second codec for the technologies riding on it,
+//! which refused a chunked answer this one read, and a third to send a
+//! Stream.
 
 use std::fmt::Write as _;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use crate::NetError;
+use crate::head::read_head;
+use crate::percent::{decode, encode};
 
-/// The largest answer the client reads, head and body together.
-pub const MAX_ANSWER: usize = 64 * 1024 * 1024;
+mod body;
 
-/// One request: the method, the target as the request line carries it, the
-/// headers beyond `Host`, `Content-Length` and `Connection`, and the body.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+/// The largest body read, whether framed by its length, its chunks or the
+/// connection's end.
+pub const MAX_BODY: usize = 64 * 1024 * 1024;
+
+/// One request, as the asking side builds it and the answering side reads
+/// it. `Host` is one of its headers, written as it is given: a signature
+/// that covers it signs what travels.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Request {
     pub method: String,
-    pub target: String,
+    /// The path as it travels: percent-encoded, opening with `/`.
+    pub path: String,
+    /// The query as names and values, before encoding.
+    pub query: Vec<(String, String)>,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
 
 impl Request {
-    /// `method` on `target`, no headers, no body.
+    /// `method` on `path`, no query, no headers, no body.
     #[must_use]
-    pub fn new(method: &str, target: impl Into<String>) -> Self {
+    pub fn new(method: &str, path: impl Into<String>) -> Self {
         Self {
             method: method.to_string(),
-            target: target.into(),
+            path: path.into(),
+            ..Self::default()
+        }
+    }
+
+    /// With one more query parameter.
+    #[must_use]
+    pub fn query(mut self, name: &str, value: &str) -> Self {
+        self.query.push((name.to_string(), value.to_string()));
+        self
+    }
+
+    /// With one more header.
+    #[must_use]
+    pub fn header(mut self, name: &str, value: &str) -> Self {
+        self.headers.push((name.to_string(), value.to_string()));
+        self
+    }
+
+    /// With `bytes` as the body.
+    #[must_use]
+    pub fn body(mut self, bytes: &[u8]) -> Self {
+        self.body = bytes.to_vec();
+        self
+    }
+
+    /// One header's value, however it was capitalised.
+    #[must_use]
+    pub fn header_value(&self, name: &str) -> Option<&str> {
+        find(&self.headers, name)
+    }
+
+    /// One query parameter's value.
+    #[must_use]
+    pub fn query_value(&self, name: &str) -> Option<&str> {
+        self.query
+            .iter()
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// The request target as the request line carries it: the path, and the
+    /// query encoded and joined.
+    #[must_use]
+    pub fn target(&self) -> String {
+        if self.query.is_empty() {
+            return self.path.clone();
+        }
+        let query: Vec<String> = self
+            .query
+            .iter()
+            .map(|(name, value)| format!("{}={}", encode(name, false), encode(value, false)))
+            .collect();
+        format!("{}?{}", self.path, query.join("&"))
+    }
+}
+
+/// One answer, the body put back together where it was chunked.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Response {
+    pub status: u16,
+    /// The phrase after the status, as the server wrote it:
+    /// `Unauthorized`.
+    pub reason: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl Response {
+    /// `status`, with the phrase [`reason`] writes it with.
+    #[must_use]
+    pub fn new(status: u16) -> Self {
+        Self {
+            status,
+            reason: reason(status).to_string(),
             ..Self::default()
         }
     }
@@ -57,26 +151,11 @@ impl Request {
         self.body = bytes.to_vec();
         self
     }
-}
 
-/// One answer, the body put back together where it was chunked.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct Response {
-    pub status: u16,
-    /// The status line as the server wrote it: `HTTP/1.1 401 Unauthorized`.
-    pub status_line: String,
-    pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
-}
-
-impl Response {
     /// One header's value, however it was capitalised.
     #[must_use]
-    pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.as_str())
+    pub fn header_value(&self, name: &str) -> Option<&str> {
+        find(&self.headers, name)
     }
 
     /// The body as text, lossily.
@@ -112,128 +191,198 @@ pub fn connect(addresses: &[SocketAddr], timeout: Duration) -> Result<TcpStream,
     })
 }
 
-/// Write `request` to `host` over `stream` and read the answer to its end.
+/// Write `request` over `stream` and read its answer.
 ///
 /// # Errors
 ///
 /// Where the connection breaks, or what comes back is not an HTTP/1.x
 /// answer this client can read.
-pub fn exchange<S: Read + Write>(
-    mut stream: S,
-    host: &str,
-    request: &Request,
-) -> Result<Response, NetError> {
-    let headers = request
-        .headers
+pub fn exchange<S: Read + Write>(mut stream: S, request: &Request) -> Result<Response, NetError> {
+    write_request(&mut stream, request)?;
+    read_response(&mut BufReader::new(stream))
+}
+
+/// Write `request`, flushed: its request line, its headers, the length its
+/// body has, and `Connection: close` unless it names its own `Connection`.
+///
+/// # Errors
+///
+/// Where the connection broke.
+pub fn write_request(writer: &mut impl Write, request: &Request) -> Result<(), NetError> {
+    let first = format!("{} {} HTTP/1.1", request.method, request.target());
+    write_message(
+        writer,
+        &first,
+        &request.headers,
+        &request.body,
+        "the request",
+    )
+}
+
+/// Write `response`, flushed, as [`write_request`] writes a request.
+///
+/// # Errors
+///
+/// Where the connection broke.
+pub fn write_response(writer: &mut impl Write, response: &Response) -> Result<(), NetError> {
+    let phrase = if response.reason.is_empty() {
+        reason(response.status)
+    } else {
+        &response.reason
+    };
+    let first = format!("HTTP/1.1 {} {phrase}", response.status);
+    write_message(
+        writer,
+        &first,
+        &response.headers,
+        &response.body,
+        "the answer",
+    )
+}
+
+/// Read one answer.
+///
+/// # Errors
+///
+/// A connection that closed before answering, a status line that is not
+/// HTTP/1.x, a transfer coding other than chunked, a broken chunk, or a
+/// body over [`MAX_BODY`] or shorter than its `Content-Length`.
+pub fn read_response(reader: &mut impl BufRead) -> Result<Response, NetError> {
+    let head = read_head(reader)?;
+    let line = head
+        .first()
+        .ok_or_else(|| NetError::new("the connection closed before an answer"))?;
+    let not_http = || NetError::new(format!("what came back is not an HTTP answer: {line}"));
+    let mut words = line
+        .strip_prefix("HTTP/1.")
+        .ok_or_else(not_http)?
+        .splitn(3, ' ');
+    let status = words
+        .nth(1)
+        .filter(|code| code.len() == 3)
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or_else(not_http)?;
+    let bodiless = status < 200 || status == 204 || status == 304;
+    let body = if bodiless {
+        Vec::new()
+    } else {
+        body::read(reader, &head, true)?
+    };
+    Ok(Response {
+        status,
+        reason: words.next().unwrap_or_default().to_string(),
+        headers: headers_of(&head),
+        body,
+    })
+}
+
+/// The answering side: one request off a connection, or `None` where the
+/// peer closed without sending one.
+///
+/// # Errors
+///
+/// Where the connection broke, the request line is unreadable, or the body
+/// is broken or over [`MAX_BODY`].
+pub fn read_request(reader: &mut impl BufRead) -> Result<Option<Request>, NetError> {
+    let head = read_head(reader)?;
+    let Some(line) = head.first() else {
+        return Ok(None);
+    };
+    let mut words = line.split_whitespace();
+    let (Some(method), Some(target)) = (words.next(), words.next()) else {
+        return Err(NetError::new(format!(
+            "a request line Xmip cannot read: {line}"
+        )));
+    };
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let query = query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (decode(name), decode(value))
+        })
+        .collect();
+    let body = body::read(reader, &head, false)?;
+    Ok(Some(Request {
+        method: method.to_string(),
+        path: path.to_string(),
+        query,
+        headers: headers_of(&head),
+        body,
+    }))
+}
+
+/// The phrase a status is written with; one the table does not know is
+/// written `Status`, which a reader ignores.
+#[must_use]
+pub const fn reason(status: u16) -> &'static str {
+    match status {
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        204 => "No Content",
+        207 => "Multi-Status",
+        304 => "Not Modified",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        423 => "Locked",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        503 => "Service Unavailable",
+        _ => "Status",
+    }
+}
+
+/// One message: its first line, its headers, the length, the connection
+/// closing unless a header says otherwise, the blank line and the body.
+fn write_message(
+    writer: &mut impl Write,
+    first: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+    what: &str,
+) -> Result<(), NetError> {
+    let lines = headers
         .iter()
         .fold(String::new(), |mut lines, (name, value)| {
             let _ = write!(lines, "{name}: {value}\r\n");
             lines
         });
+    let close = if find(headers, "connection").is_none() {
+        "Connection: close\r\n"
+    } else {
+        ""
+    };
     let head = format!(
-        "{} {} HTTP/1.1\r\nHost: {host}\r\n{headers}Content-Length: {}\r\n\
-         Connection: close\r\n\r\n",
-        request.method,
-        request.target,
-        request.body.len()
+        "{first}\r\n{lines}Content-Length: {}\r\n{close}\r\n",
+        body.len()
     );
-    stream
+    writer
         .write_all(head.as_bytes())
-        .and_then(|()| stream.write_all(&request.body))
-        .and_then(|()| stream.flush())
-        .map_err(|failed| NetError::from_io("writing the request", &failed))?;
-
-    // `Connection: close`: the answer is everything up to the end.
-    let mut answer = Vec::new();
-    let limit = u64::try_from(MAX_ANSWER).unwrap_or(u64::MAX) + 1;
-    stream
-        .take(limit)
-        .read_to_end(&mut answer)
-        .map_err(|failed| NetError::from_io("reading the answer", &failed))?;
-    if answer.len() > MAX_ANSWER {
-        return Err(NetError::new(format!(
-            "an answer over the {MAX_ANSWER} bytes this client reads"
-        )));
-    }
-
-    read_response(&answer)
+        .and_then(|()| writer.write_all(body))
+        .and_then(|()| writer.flush())
+        .map_err(|failed| NetError::from_io(&format!("writing {what}"), &failed))
 }
 
-/// The status, the headers and the body of one answer read to its end.
-fn read_response(answer: &[u8]) -> Result<Response, NetError> {
-    let not_http = || NetError::new("what came back is not an HTTP response");
-    let split = answer
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(not_http)?;
-    let head = String::from_utf8_lossy(&answer[..split]);
-    let body = &answer[split + 4..];
-
-    let mut lines = head.split("\r\n");
-    let status_line = lines.next().unwrap_or_default().to_string();
-    let status = status_line
-        .strip_prefix("HTTP/1.")
-        .and_then(|line| line.split(' ').nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or_else(|| NetError::new("what came back has no HTTP status"))?;
-    let headers: Vec<(String, String)> = lines
+fn headers_of(head: &[String]) -> Vec<(String, String)> {
+    head.iter()
+        .skip(1)
         .filter_map(|line| line.split_once(':'))
         .map(|(name, value)| (name.trim().to_string(), value.trim().to_string()))
-        .collect();
-
-    let mut response = Response {
-        status,
-        status_line,
-        headers,
-        body: Vec::new(),
-    };
-    let chunked = response
-        .header("transfer-encoding")
-        .is_some_and(|value| value.to_ascii_lowercase().contains("chunked"));
-    response.body = if chunked {
-        unchunk(body)?
-    } else if let Some(length) = response.header("content-length") {
-        let length = Some(length)
-            .filter(|digits| digits.bytes().all(|byte| byte.is_ascii_digit()))
-            .and_then(|digits| digits.parse::<usize>().ok())
-            .ok_or_else(|| NetError::new(format!("a Content-Length '{length}' is not one")))?;
-        body.get(..length)
-            .ok_or_else(|| NetError::new("the body is shorter than its Content-Length"))?
-            .to_vec()
-    } else {
-        body.to_vec()
-    };
-    Ok(response)
+        .collect()
 }
 
-/// A chunked body, put back together.
-fn unchunk(mut body: &[u8]) -> Result<Vec<u8>, NetError> {
-    let broken = || NetError::new("a chunked body is broken");
-    let mut whole = Vec::new();
-
-    loop {
-        let end = body
-            .windows(2)
-            .position(|window| window == b"\r\n")
-            .ok_or_else(broken)?;
-        let line = std::str::from_utf8(&body[..end]).map_err(|_| broken())?;
-        let size = line.split(';').next().unwrap_or_default().trim();
-        let size = usize::from_str_radix(size, 16)
-            .ok()
-            .filter(|_| size.bytes().all(|byte| byte.is_ascii_hexdigit()))
-            .ok_or_else(broken)?;
-        let rest = &body[end + 2..];
-
-        if size == 0 {
-            return Ok(whole);
-        }
-
-        whole.extend_from_slice(rest.get(..size).ok_or_else(broken)?);
-        body = rest
-            .get(size..)
-            .and_then(|after| after.strip_prefix(b"\r\n"))
-            .ok_or_else(broken)?;
-    }
+fn find<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
 }
 
 #[cfg(test)]
@@ -271,16 +420,21 @@ mod tests {
         }
     }
 
+    fn answer(bytes: &[u8]) -> Result<Response, NetError> {
+        read_response(&mut &bytes[..])
+    }
+
     #[test]
-    fn the_request_carries_the_host_the_headers_the_length_and_the_close() {
+    fn the_request_carries_its_headers_the_length_and_the_close() {
         let mut connection = wire(b"HTTP/1.1 204 No Content\r\n\r\n");
         let request = Request::new("POST", "/v1/data/allow")
+            .header("Host", "[::1]:8181")
             .header("Content-Type", "application/json")
             .body(b"{}");
 
-        let answer = exchange(&mut connection, "[::1]:8181", &request).expect("answered");
+        let answer = exchange(&mut connection, &request).expect("answered");
 
-        assert_eq!(answer.status, 204);
+        assert_eq!((answer.status, answer.reason.as_str()), (204, "No Content"));
         assert_eq!(
             String::from_utf8(connection.written).expect("text"),
             "POST /v1/data/allow HTTP/1.1\r\nHost: [::1]:8181\r\n\
@@ -290,38 +444,118 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_is_read_by_its_length_its_chunks_or_its_end() {
-        let plain = b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\n{\"result\":true}trailing";
-        let chunked = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n\
-            9\r\n{\"result\"\r\n6\r\n:true}\r\n0\r\n\r\n";
-        let unframed = b"HTTP/1.0 200 OK\r\n\r\nto the end";
-
-        for answer in [&plain[..], &chunked[..]] {
-            let read = read_response(answer).expect("read");
-            assert_eq!(read.text(), "{\"result\":true}");
-        }
-        assert_eq!(read_response(unframed).expect("read").text(), "to the end");
+    fn a_request_round_trips_through_its_own_reader() {
+        let request = Request::new("PUT", "/bucket/in/1%20a.edi")
+            .query("prefix", "in/")
+            .header("Host", "s3.local")
+            .body(b"UNA");
+        let mut both = wire(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+        let response = exchange(&mut both, &request).expect("exchanged");
+        assert_eq!(
+            (response.status, response.body.as_slice()),
+            (200, &b"ok"[..])
+        );
+        let written = both.written;
+        assert!(written.starts_with(b"PUT /bucket/in/1%20a.edi?prefix=in%2F HTTP/1.1\r\n"));
+        let read = read_request(&mut &written[..]).expect("read").expect("one");
+        assert_eq!(read.method, "PUT");
+        assert_eq!(read.path, "/bucket/in/1%20a.edi");
+        assert_eq!(read.query_value("prefix"), Some("in/"));
+        assert_eq!(read.query_value("absent"), None);
+        assert_eq!(read.header_value("host"), Some("s3.local"));
+        assert_eq!(read.body, b"UNA");
+        assert!(read_request(&mut &b""[..]).expect("closed").is_none());
+        assert!(read_request(&mut &b"GET\r\n\r\n"[..]).is_err());
     }
 
     #[test]
-    fn the_status_and_its_line_are_kept_and_headers_are_found_in_any_case() {
-        let answer = read_response(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic\r\n\r\n")
-            .expect("read");
+    fn an_answer_is_read_by_its_length_its_chunks_or_its_end() {
+        let plain = b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\n{\"result\":true}trailing";
+        let chunked = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n\
+            9\r\n{\"result\"\r\n6;name=x\r\n:true}\r\n0\r\nX-Trailer: 1\r\n\r\n";
+        let unframed = b"HTTP/1.0 200 OK\r\n\r\nto the end";
 
-        assert_eq!(answer.status, 401);
-        assert_eq!(answer.status_line, "HTTP/1.1 401 Unauthorized");
-        assert_eq!(answer.header("www-authenticate"), Some("Basic"));
+        for bytes in [&plain[..], &chunked[..]] {
+            assert_eq!(answer(bytes).expect("read").text(), "{\"result\":true}");
+        }
+        assert_eq!(answer(unframed).expect("read").text(), "to the end");
+    }
+
+    #[test]
+    fn a_connection_kept_carries_the_next_message_and_no_body_is_read_past_a_204() {
+        let kept = Request::new("PROPFIND", "/orders")
+            .header("Host", "dav.example")
+            .header("Connection", "keep-alive");
+        let mut written = Vec::new();
+        write_request(&mut written, &kept).expect("written");
+        write_request(&mut written, &Request::new("GET", "/orders/1")).expect("written");
+        let text = String::from_utf8_lossy(&written).into_owned();
+        assert_eq!(text.matches("Connection:").count(), 2, "{text}");
+        assert!(text.contains("Connection: keep-alive\r\n"), "{text}");
+        let mut reader = &written[..];
+        let first = read_request(&mut reader).expect("read").expect("one");
+        assert_eq!(first.method, "PROPFIND");
+        let second = read_request(&mut reader).expect("read").expect("two");
+        assert_eq!(second.path, "/orders/1");
+        let mut answers = Vec::new();
+        let open = Response::new(204).header("Connection", "keep-alive");
+        write_response(&mut answers, &open).expect("written");
+        write_response(&mut answers, &Response::new(207).body(b"<a/>")).expect("written");
+        assert!(answers.starts_with(b"HTTP/1.1 204 No Content\r\n"));
+        let mut reader = &answers[..];
+        assert!(read_response(&mut reader).expect("204").body.is_empty());
+        let multi = read_response(&mut reader).expect("207");
+        assert_eq!((multi.status, multi.body.as_slice()), (207, &b"<a/>"[..]));
+    }
+
+    #[test]
+    fn the_status_and_its_phrase_are_kept_and_headers_are_found_in_any_case() {
+        let read =
+            answer(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic\r\n\r\n").expect("read");
+
+        assert_eq!((read.status, read.reason.as_str()), (401, "Unauthorized"));
+        assert_eq!(read.header_value("www-authenticate"), Some("Basic"));
+
+        let mut written = Vec::new();
+        write_response(&mut written, &Response::new(404).body(b"<Error/>")).expect("written");
+        let back = answer(&written).expect("read");
+        assert_eq!((back.status, back.body.as_slice()), (404, &b"<Error/>"[..]));
     }
 
     #[test]
     fn what_is_not_an_http_answer_is_refused() {
-        assert!(read_response(b"").is_err());
-        assert!(read_response(b"SSH-2.0-OpenSSH\r\n\r\n").is_err());
-        assert!(read_response(b"220 mail.example ESMTP\r\n\r\n").is_err());
-        assert!(read_response(b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nshort").is_err());
-        let broken =
-            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n+5\r\nhello\r\n0\r\n\r\n";
-        assert!(read_response(broken).is_err());
+        let over = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+            MAX_BODY + 1
+        );
+        let refused = [
+            &b""[..],
+            b"nonsense\r\n\r\n",
+            b"SSH-2.0-OpenSSH\r\n\r\n",
+            b"220 mail.example ESMTP\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nshort",
+            b"HTTP/1.1 200 OK\r\nContent-Length: eight\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n+5\r\nhello\r\n0\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhelloXX0\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n",
+            over.as_bytes(),
+        ];
+        for bytes in refused {
+            assert!(answer(bytes).is_err(), "{}", String::from_utf8_lossy(bytes));
+        }
+    }
+
+    #[test]
+    fn a_request_without_a_length_has_no_body() {
+        let mut reader = &b"POST / HTTP/1.1\r\nHost: x\r\n\r\nGET /next HTTP/1.1\r\n\r\n"[..];
+
+        let first = read_request(&mut reader).expect("read").expect("one");
+
+        assert!(first.body.is_empty());
+        assert_eq!(
+            read_request(&mut reader).expect("read").expect("two").path,
+            "/next"
+        );
     }
 
     #[test]
