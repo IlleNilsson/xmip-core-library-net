@@ -1,5 +1,6 @@
 //! The body a head frames: its chunks, its `Content-Length`, or the
-//! connection's end, and never more than [`MAX_BODY`].
+//! connection's end, and never more than [`MAX_BODY`]; and the trailer a
+//! chunked body ends with.
 
 use std::io::{BufRead, Read};
 
@@ -9,12 +10,12 @@ use crate::head::{header, read_head, trim_eol};
 
 /// The body `head` frames: its chunks, its `Content-Length`, or — for an
 /// answer, `to_end` — everything up to the close. A request with neither
-/// has none.
+/// has none. The trailer's lines come beside it, where it was chunked.
 pub(super) fn read(
     reader: &mut impl BufRead,
     head: &[String],
     to_end: bool,
-) -> Result<Vec<u8>, NetError> {
+) -> Result<(Vec<u8>, Vec<String>), NetError> {
     if let Some(codings) = header(head, "transfer-encoding") {
         if !codings.trim().eq_ignore_ascii_case("chunked") {
             return Err(NetError::new(format!(
@@ -33,7 +34,7 @@ pub(super) fn read(
         reader
             .read_exact(&mut bytes)
             .map_err(|failed| NetError::from_io("reading the body", &failed))?;
-        return Ok(bytes);
+        return Ok((bytes, Vec::new()));
     }
     let mut body = Vec::new();
     if to_end {
@@ -44,12 +45,11 @@ pub(super) fn read(
             .map_err(|failed| NetError::from_io("reading the body", &failed))?;
         within(body.len())?;
     }
-    Ok(body)
+    Ok((body, Vec::new()))
 }
 
-/// A chunked body, put back together; the trailer, where there is one, is
-/// read past and dropped.
-fn unchunk(reader: &mut impl BufRead) -> Result<Vec<u8>, NetError> {
+/// A chunked body, put back together, and the lines of its trailer.
+fn unchunk(reader: &mut impl BufRead) -> Result<(Vec<u8>, Vec<String>), NetError> {
     let broken = || NetError::new("a chunked body is broken");
     let read = |failed: std::io::Error| NetError::from_io("reading a chunk", &failed);
     let mut whole = Vec::new();
@@ -65,8 +65,7 @@ fn unchunk(reader: &mut impl BufRead) -> Result<Vec<u8>, NetError> {
             .ok_or_else(broken)?;
 
         if size == 0 {
-            read_head(reader)?;
-            return Ok(whole);
+            return Ok((whole, read_head(reader)?));
         }
 
         within(whole.len().saturating_add(size))?;

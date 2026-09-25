@@ -5,9 +5,10 @@
 //! ([`authority`]), a network in prefix notation ([`Network`]), a hardware
 //! address in IEEE 802 notation ([`mac`]), percent-encoding ([`percent`]),
 //! a filesystem path as a URI's path ([`uri`]), a head as the
-//! line-oriented protocols write it ([`head`]), and HTTP/1.1 on the wire,
-//! both halves, with the exchange of a request for its answer ([`http`],
-//! to an [`Endpoint`]).
+//! line-oriented protocols write it ([`head`]), and HTTP on the wire, both
+//! halves, with the exchange of a request for its answer: HTTP/1.1
+//! ([`http`], to an [`Endpoint`]) and HTTP/2 with its header compression
+//! ([`http2`]).
 //!
 //! Until 2026-09-22 identification and authorization each carried a network
 //! type, and authorization read the peer's address under `address` while
@@ -25,6 +26,7 @@ pub mod authority;
 mod endpoint;
 pub mod head;
 pub mod http;
+pub mod http2;
 pub mod mac;
 mod network;
 pub mod percent;
