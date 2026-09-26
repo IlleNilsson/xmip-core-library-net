@@ -40,8 +40,10 @@ use message::{Message, write_message};
 
 mod body;
 mod message;
+mod response;
 mod version;
 
+pub use response::Response;
 pub use version::Version;
 
 /// The largest body read, whether framed by its length, its chunks or the
@@ -122,71 +124,6 @@ impl Request {
             .map(|(name, value)| format!("{}={}", encode(name, false), encode(value, false)))
             .collect();
         format!("{}?{}", self.path, query.join("&"))
-    }
-}
-
-/// One answer, the body put back together where it was chunked.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Response {
-    pub status: u16,
-    /// The phrase after the status, as the server wrote it:
-    /// `Unauthorized`. HTTP/2 carries none, and [`reason`] fills it.
-    pub reason: String,
-    pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
-    /// The fields after the body: HTTP/2's trailing `HEADERS`, or the
-    /// trailer of a chunked HTTP/1.1 answer — where gRPC puts its status.
-    pub trailers: Vec<(String, String)>,
-}
-
-impl Response {
-    /// `status`, with the phrase [`reason`] writes it with.
-    #[must_use]
-    pub fn new(status: u16) -> Self {
-        Self {
-            status,
-            reason: reason(status).to_string(),
-            ..Self::default()
-        }
-    }
-
-    /// With one more header.
-    #[must_use]
-    pub fn header(mut self, name: &str, value: &str) -> Self {
-        self.headers.push((name.to_string(), value.to_string()));
-        self
-    }
-
-    /// With `bytes` as the body.
-    #[must_use]
-    pub fn body(mut self, bytes: &[u8]) -> Self {
-        self.body = bytes.to_vec();
-        self
-    }
-
-    /// With one more trailer field.
-    #[must_use]
-    pub fn trailer(mut self, name: &str, value: &str) -> Self {
-        self.trailers.push((name.to_string(), value.to_string()));
-        self
-    }
-
-    /// One header's value, however it was capitalised.
-    #[must_use]
-    pub fn header_value(&self, name: &str) -> Option<&str> {
-        find(&self.headers, name)
-    }
-
-    /// One trailer field's value, however it was capitalised.
-    #[must_use]
-    pub fn trailer_value(&self, name: &str) -> Option<&str> {
-        find(&self.trailers, name)
-    }
-
-    /// The body as text, lossily.
-    #[must_use]
-    pub fn text(&self) -> String {
-        String::from_utf8_lossy(&self.body).into_owned()
     }
 }
 
@@ -482,9 +419,19 @@ mod tests {
         let unframed = b"HTTP/1.0 200 OK\r\n\r\nto the end";
 
         for bytes in [&plain[..], &chunked[..]] {
-            assert_eq!(answer(bytes).expect("read").text(), "{\"result\":true}");
+            let read = answer(bytes).expect("read");
+            assert_eq!(read.text().expect("text"), "{\"result\":true}");
         }
-        assert_eq!(answer(unframed).expect("read").text(), "to the end");
+        let read = answer(unframed).expect("read");
+        assert_eq!(read.text().expect("text"), "to the end");
+    }
+
+    #[test]
+    fn a_body_that_is_not_utf_8_is_refused_as_text_and_kept_whole_as_bytes() {
+        let binary = Response::new(200).body(&[0x7b, 0xff, 0xfe, 0x7d]);
+        let refused = binary.text().expect_err("not text");
+        assert!(refused.to_string().contains("not UTF-8"), "{refused}");
+        assert_eq!(binary.body, [0x7b, 0xff, 0xfe, 0x7d]);
     }
 
     #[test]
