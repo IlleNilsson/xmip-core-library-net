@@ -36,12 +36,22 @@ impl std::error::Error for BrokenEscape {}
 /// where it separates the segments of a path.
 #[must_use]
 pub fn encode(text: &str, keep_slash: bool) -> String {
+    encode_keeping(text, |byte| {
+        byte.is_ascii_alphanumeric()
+            || matches!(byte, b'-' | b'_' | b'.' | b'~')
+            || (keep_slash && byte == b'/')
+    })
+}
+
+/// `text` with every byte `plain` does not keep as `%XX`: the one writer,
+/// for a standard whose set is not RFC 3986's — an event's wire attributes
+/// in HTTP headers escape only space, `"`, `%` and what is not printable
+/// ASCII.
+#[must_use]
+pub fn encode_keeping(text: &str, plain: impl Fn(u8) -> bool) -> String {
     let mut out = String::with_capacity(text.len());
     for byte in text.bytes() {
-        let plain = byte.is_ascii_alphanumeric()
-            || matches!(byte, b'-' | b'_' | b'.' | b'~')
-            || (keep_slash && byte == b'/');
-        if plain {
+        if plain(byte) {
             out.push(char::from(byte));
         } else {
             out.push('%');
@@ -104,6 +114,15 @@ mod tests {
         assert_eq!(encode("in/", false), "in%2F");
         assert_eq!(encode("a+b/c=d.e-f", false), "a%2Bb%2Fc%3Dd.e-f");
         assert_eq!(encode("räksmörgås", false), "r%C3%A4ksm%C3%B6rg%C3%A5s");
+    }
+
+    #[test]
+    fn encoding_keeps_what_the_caller_keeps() {
+        let printable = |byte: u8| (0x21..=0x7e).contains(&byte) && !matches!(byte, b'"' | b'%');
+        assert_eq!(
+            encode_keeping("https://example.com/a b\"%ä", printable),
+            "https://example.com/a%20b%22%25%C3%A4"
+        );
     }
 
     #[test]
