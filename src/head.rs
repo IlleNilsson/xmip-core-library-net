@@ -9,29 +9,16 @@
 //!
 //! The transport capability held this reader until 2026-09-25, when HTTP's
 //! exchange came here as [`crate::http`] and needed it below the transport.
+//! Each line is read by [`crate::read::line`], under its ceiling and
+//! its UTF-8 policy.
 
 use std::io::BufRead;
 
 use crate::NetError;
+use crate::read;
 
 /// The largest number of header lines read before giving up.
 pub const MAX_HEADERS: usize = 200;
-
-/// Strip exactly one trailing line ending, CRLF or LF.
-#[must_use]
-pub fn trim_eol(raw: &[u8]) -> &[u8] {
-    let mut end = raw.len();
-
-    if end > 0 && raw[end - 1] == b'\n' {
-        end -= 1;
-    }
-
-    if end > 0 && raw[end - 1] == b'\r' {
-        end -= 1;
-    }
-
-    &raw[..end]
-}
 
 /// Read the lines before the blank line that ends a head. A connection
 /// that closes first ends it too, so a peer that sent nothing reads as no
@@ -39,23 +26,14 @@ pub fn trim_eol(raw: &[u8]) -> &[u8] {
 ///
 /// # Errors
 ///
-/// Where the connection could not be read, or sent more header lines than
-/// [`MAX_HEADERS`] — which is a peer misbehaving, not a large request.
+/// Where the connection could not be read, a line was over
+/// [`crate::read::MAX_LINE`] or not UTF-8, or the peer sent more header
+/// lines than [`MAX_HEADERS`] — which is a peer misbehaving, not a large
+/// request.
 pub fn read_head(reader: &mut impl BufRead) -> Result<Vec<String>, NetError> {
     let mut lines = Vec::new();
 
-    loop {
-        let mut raw = Vec::new();
-        let read = reader
-            .read_until(b'\n', &mut raw)
-            .map_err(|failed| NetError::from_io("reading a header line", &failed))?;
-
-        if read == 0 {
-            break;
-        }
-
-        let line = String::from_utf8_lossy(trim_eol(&raw)).to_string();
-
+    while let Some(line) = read::line(reader)? {
         if line.is_empty() {
             break;
         }
@@ -90,14 +68,6 @@ pub fn header<'a>(lines: &'a [String], name: &str) -> Option<&'a str> {
 mod tests {
     use super::*;
     use std::fmt::Write;
-
-    #[test]
-    fn one_line_ending_comes_off_and_only_one() {
-        assert_eq!(trim_eol(b"line\r\n"), b"line");
-        assert_eq!(trim_eol(b"line\n"), b"line");
-        assert_eq!(trim_eol(b"line"), b"line");
-        assert_eq!(trim_eol(b"line\n\n"), b"line\n");
-    }
 
     #[test]
     fn a_header_is_found_however_the_peer_capitalised_it() {

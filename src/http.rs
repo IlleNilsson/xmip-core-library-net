@@ -46,10 +46,6 @@ mod version;
 pub use response::Response;
 pub use version::Version;
 
-/// The largest body read, whether framed by its length, its chunks or the
-/// connection's end.
-pub const MAX_BODY: usize = 64 * 1024 * 1024;
-
 /// One request, as the asking side builds it and the answering side reads
 /// it. `Host` is one of its headers, written as it is given: a signature
 /// that covers it signs what travels.
@@ -209,7 +205,7 @@ pub fn write_response(writer: &mut impl Write, response: &Response) -> Result<()
 ///
 /// A connection that closed before answering, a status line that is not
 /// HTTP/1.x, a transfer coding other than chunked, a broken chunk, or a
-/// body over [`MAX_BODY`] or shorter than its `Content-Length`.
+/// body over [`crate::MAX_BODY`] or shorter than its `Content-Length`.
 pub fn read_response(reader: &mut impl BufRead) -> Result<Response, NetError> {
     let head = read_head(reader)?;
     let line = head
@@ -246,7 +242,7 @@ pub fn read_response(reader: &mut impl BufRead) -> Result<Response, NetError> {
 /// # Errors
 ///
 /// Where the connection broke, the request line is unreadable, or the body
-/// is broken or over [`MAX_BODY`].
+/// is broken or over [`crate::MAX_BODY`].
 pub fn read_request(reader: &mut impl BufRead) -> Result<Option<Request>, NetError> {
     let head = read_head(reader)?;
     let Some(line) = head.first() else {
@@ -479,7 +475,7 @@ mod tests {
     fn what_is_not_an_http_answer_is_refused() {
         let over = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
-            MAX_BODY + 1
+            crate::MAX_BODY + 1
         );
         let refused = [
             &b""[..],

@@ -4,8 +4,10 @@
 //! as a transport writes it ([`address`]), an authority as a URI writes it
 //! ([`authority`]), a network in prefix notation ([`Network`]), a hardware
 //! address in IEEE 802 notation ([`mac`]), percent-encoding ([`percent`]),
-//! a filesystem path as a URI's path ([`uri`]), a head as the
-//! line-oriented protocols write it ([`head`]), and HTTP on the wire, both
+//! a filesystem path as a URI's path ([`uri`]), reading off a connection
+//! under a ceiling ([`read`]), a head as the line-oriented protocols write
+//! it ([`head`]), the code their replies open with ([`reply`]), the most a
+//! connection is read for ([`MAX_BODY`]), and HTTP on the wire, both
 //! halves, with the exchange of a request for its answer: HTTP/1.1
 //! ([`http`], to an [`Endpoint`]) and HTTP/2 with its header compression
 //! ([`http2`]).
@@ -20,6 +22,8 @@
 //! three or four times. Until 2026-09-25 the http transport carried a
 //! second HTTP/1.1 codec and a second URL reader, and the transport
 //! capability the head reader.
+//! Until 2026-09-27 a dozen technologies read lines themselves, unbounded,
+//! and eleven restated the body ceiling.
 
 pub mod address;
 pub mod authority;
@@ -30,10 +34,19 @@ pub mod http2;
 pub mod mac;
 mod network;
 pub mod percent;
+pub mod read;
+pub mod reply;
 pub mod uri;
 
 pub use endpoint::Endpoint;
 pub use network::Network;
+
+/// The largest single Stream, body or message Xmip reads off one connection,
+/// whatever frames it: a peer claiming four gigabytes must not get four
+/// gigabytes allocated. A protocol that states a maximum of its own keeps
+/// it, named for that protocol; every other ceiling on what a connection
+/// carries is this one.
+pub const MAX_BODY: usize = 64 * 1024 * 1024;
 
 /// Why text is not the address or network it was read as, or why a
 /// connection did not give the answer asked of it.
