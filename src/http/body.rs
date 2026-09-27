@@ -2,11 +2,11 @@
 //! connection's end, and never more than [`MAX_BODY`]; and the trailer a
 //! chunked body ends with.
 
-use std::io::{BufRead, Read};
+use std::io::BufRead;
 
-use super::MAX_BODY;
-use crate::NetError;
-use crate::head::{header, read_head, trim_eol};
+use crate::head::{header, read_head};
+use crate::read;
+use crate::{MAX_BODY, NetError};
 
 /// The body `head` frames: its chunks, its `Content-Length`, or — for an
 /// answer, `to_end` — everything up to the close. A request with neither
@@ -36,16 +36,10 @@ pub(super) fn read(
             .map_err(|failed| NetError::from_io("reading the body", &failed))?;
         return Ok((bytes, Vec::new()));
     }
-    let mut body = Vec::new();
     if to_end {
-        let limit = u64::try_from(MAX_BODY).unwrap_or(u64::MAX) + 1;
-        reader
-            .take(limit)
-            .read_to_end(&mut body)
-            .map_err(|failed| NetError::from_io("reading the body", &failed))?;
-        within(body.len())?;
+        return Ok((read::to_end(reader, MAX_BODY)?, Vec::new()));
     }
-    Ok((body, Vec::new()))
+    Ok((Vec::new(), Vec::new()))
 }
 
 /// A chunked body, put back together, and the lines of its trailer.
@@ -55,9 +49,7 @@ fn unchunk(reader: &mut impl BufRead) -> Result<(Vec<u8>, Vec<String>), NetError
     let mut whole = Vec::new();
 
     loop {
-        let mut line = Vec::new();
-        reader.read_until(b'\n', &mut line).map_err(read)?;
-        let line = std::str::from_utf8(trim_eol(&line)).map_err(|_| broken())?;
+        let line = read::line(reader)?.ok_or_else(broken)?;
         let size = line.split(';').next().unwrap_or_default().trim();
         let size = Some(size)
             .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_hexdigit()))

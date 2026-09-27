@@ -10,8 +10,8 @@ use super::error::{ErrorCode, Violation};
 use super::frame::{self, ACK, END_HEADERS, END_STREAM, Frame, Kind, MAX_STREAM_ID, ReadFailure};
 use super::message::check;
 use super::stream::State;
+use crate::MAX_BODY;
 use crate::NetError;
-use crate::http::MAX_BODY;
 
 /// The largest header block assembled, before it is decoded.
 const MAX_BLOCK: usize = 1024 * 1024;
