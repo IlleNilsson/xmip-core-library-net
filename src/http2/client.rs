@@ -100,6 +100,13 @@ impl<S: Read + Write> Client<S> {
         self.connection.ping(opaque)
     }
 
+    /// Whether the server has said it is going away: a connection that
+    /// carries nothing more, and is let go rather than kept.
+    #[must_use]
+    pub const fn going_away(&self) -> bool {
+        self.connection.goaway.is_some()
+    }
+
     /// How often a request's body waited for the server to open a window.
     #[must_use]
     pub const fn stalls(&self) -> usize {

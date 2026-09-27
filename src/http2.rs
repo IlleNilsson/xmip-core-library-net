@@ -153,6 +153,7 @@ mod tests {
                 .status,
             204
         );
+        assert!(client.going_away(), "the GOAWAY came before the answer");
         let refused = client.send(&Request::new("GET", "/2")).expect_err("gone");
         assert_eq!(refused.io, Some(ErrorKind::ConnectionAborted), "{refused}");
         drop(client);
