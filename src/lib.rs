@@ -4,7 +4,8 @@
 //! as a transport writes it ([`address`]), an authority as a URI writes it
 //! ([`authority`]), a network in prefix notation ([`Network`]), a hardware
 //! address in IEEE 802 notation ([`mac`]), percent-encoding ([`percent`]),
-//! a filesystem path as a URI's path ([`uri`]), reading off a connection
+//! a filesystem path as a URI's path ([`uri`]), a TCP connection to every
+//! address a peer resolves to in turn ([`connect`]), reading off a connection
 //! under a ceiling ([`read`]), a head as the line-oriented protocols write
 //! it ([`head`]), the code their replies open with ([`reply`]), the most a
 //! connection is read for ([`MAX_BODY`]), and HTTP on the wire, both
@@ -27,6 +28,7 @@
 
 pub mod address;
 pub mod authority;
+mod connect;
 mod endpoint;
 pub mod head;
 pub mod http;
@@ -38,6 +40,7 @@ pub mod read;
 pub mod reply;
 pub mod uri;
 
+pub use connect::connect;
 pub use endpoint::Endpoint;
 pub use network::Network;
 

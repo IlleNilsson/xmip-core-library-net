@@ -15,10 +15,15 @@ pub(super) struct Message<'a> {
     pub(super) headers: &'a [(String, String)],
     pub(super) body: &'a [u8],
     pub(super) trailers: &'a [(String, String)],
+    /// Whether the connection is said to close after this message where
+    /// its headers name no `Connection` of their own; HTTP/1.1 keeps it
+    /// otherwise.
+    pub(super) close: bool,
 }
 
 /// One message: its first line, its headers, the length, the connection
-/// closing unless a header says otherwise, the blank line and the body —
+/// closing where the message asks and no header says otherwise, the blank
+/// line and the body —
 /// or, where it has a trailer, the body as one chunk and the trailer after
 /// the last.
 pub(super) fn write_message(
@@ -34,7 +39,7 @@ pub(super) fn write_message(
                 lines
             })
     };
-    let close = if find(message.headers, "connection").is_none() {
+    let close = if message.close && find(message.headers, "connection").is_none() {
         "Connection: close\r\n"
     } else {
         ""

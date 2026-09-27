@@ -15,7 +15,9 @@
 //! administration API — and what every technology riding on HTTP writes and
 //! reads underneath its signature: S3, Azure Blob, Cloud Storage, AS2, AS4,
 //! `WebDAV` and the rest. No TLS, no redirects, no connection pool: the
-//! caller opens the connection, and the http transport is where HTTPS is.
+//! caller opens the connection ([`crate::connect`]), and the http
+//! transport is where HTTPS is and where a connection is kept between
+//! requests ([`exchange_kept`] says whether one can be).
 //!
 //! The [`Request`] and [`Response`] are HTTP's, not this version's:
 //! [`crate::http2`] carries the same two over HTTP/2, trailers included,
@@ -30,8 +32,6 @@
 //! Stream.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpStream};
-use std::time::Duration;
 
 use crate::NetError;
 use crate::head::read_head;
@@ -123,32 +123,6 @@ impl Request {
     }
 }
 
-/// A connection to the first of `addresses` that accepts one within
-/// `timeout`, with `timeout` on its reads and writes.
-///
-/// # Errors
-///
-/// Where none accepts, or the timeouts cannot be set.
-pub fn connect(addresses: &[SocketAddr], timeout: Duration) -> Result<TcpStream, NetError> {
-    let mut last = None;
-    for address in addresses {
-        match TcpStream::connect_timeout(address, timeout) {
-            Ok(stream) => {
-                stream
-                    .set_read_timeout(Some(timeout))
-                    .and_then(|()| stream.set_write_timeout(Some(timeout)))
-                    .map_err(|failed| NetError::from_io("setting the timeouts", &failed))?;
-                return Ok(stream);
-            }
-            Err(failed) => last = Some(failed),
-        }
-    }
-    Err(match last {
-        Some(failed) => NetError::from_io("no address accepted the connection", &failed),
-        None => NetError::new("there is no address to connect to"),
-    })
-}
-
 /// Write `request` over `stream` and read its answer.
 ///
 /// # Errors
@@ -160,6 +134,31 @@ pub fn exchange<S: Read + Write>(mut stream: S, request: &Request) -> Result<Res
     read_response(&mut BufReader::new(stream))
 }
 
+/// Write `request` over a connection kept for the next, read its answer,
+/// and say whether the connection can carry another: the request says no
+/// `Connection: close` — HTTP/1.1 keeps a connection unless one side says
+/// otherwise — and the connection is spent where the answer closes it or
+/// was framed by the connection's end.
+///
+/// # Errors
+///
+/// As [`exchange`].
+pub fn exchange_kept<S: Read + Write>(
+    stream: &mut S,
+    request: &Request,
+) -> Result<(Response, bool), NetError> {
+    write(stream, request, false)?;
+    let answer = read_response(&mut BufReader::new(&mut *stream))?;
+    let closed = answer
+        .header_value("connection")
+        .is_some_and(|said| said.eq_ignore_ascii_case("close"));
+    let bodiless = answer.status < 200 || answer.status == 204 || answer.status == 304;
+    let framed = bodiless
+        || answer.header_value("content-length").is_some()
+        || answer.header_value("transfer-encoding").is_some();
+    Ok((answer, framed && !closed))
+}
+
 /// Write `request`, flushed: its request line, its headers, the length its
 /// body has, and `Connection: close` unless it names its own `Connection`.
 ///
@@ -167,12 +166,19 @@ pub fn exchange<S: Read + Write>(mut stream: S, request: &Request) -> Result<Res
 ///
 /// Where the connection broke.
 pub fn write_request(writer: &mut impl Write, request: &Request) -> Result<(), NetError> {
+    write(writer, request, true)
+}
+
+/// `request` written, saying the connection closes after it where `close`
+/// and the request names no `Connection` of its own.
+fn write(writer: &mut impl Write, request: &Request, close: bool) -> Result<(), NetError> {
     let first = format!("{} {} HTTP/1.1", request.method, request.target());
     let message = Message {
         first: &first,
         headers: &request.headers,
         body: &request.body,
         trailers: &[],
+        close,
     };
     write_message(writer, &message, "the request")
 }
@@ -195,6 +201,7 @@ pub fn write_response(writer: &mut impl Write, response: &Response) -> Result<()
         headers: &response.headers,
         body: &response.body,
         trailers: &response.trailers,
+        close: true,
     };
     write_message(writer, &message, "the answer")
 }
@@ -529,14 +536,27 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_no_address_accepts_is_refused_with_its_kind() {
-        assert!(connect(&[], Duration::from_millis(50)).is_err());
-
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let address = listener.local_addr().expect("address");
-        drop(listener);
-
-        let failed = connect(&[address], Duration::from_millis(500)).expect_err("refused");
-        assert!(failed.io.is_some(), "{failed}");
+    fn a_kept_exchange_says_no_close_and_knows_when_the_connection_is_spent() {
+        let request = Request::new("GET", "/").header("Host", "example");
+        let cases: [(&[u8], bool); 5] = [
+            (b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok", true),
+            (b"HTTP/1.1 204 No Content\r\n\r\n", true),
+            (
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+                true,
+            ),
+            (
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: Close\r\n\r\n",
+                false,
+            ),
+            (b"HTTP/1.1 200 OK\r\n\r\nto the end", false),
+        ];
+        for (answer, reusable) in cases {
+            let mut connection = wire(answer);
+            let (_, kept) = exchange_kept(&mut connection, &request).expect("answered");
+            assert_eq!(kept, reusable, "{}", String::from_utf8_lossy(answer));
+            let written = String::from_utf8(connection.written).expect("text");
+            assert!(!written.contains("Connection:"), "{written}");
+        }
     }
 }
