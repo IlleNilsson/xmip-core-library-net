@@ -56,6 +56,26 @@ impl<S: Read + Write> Server<S> {
     /// Where the connection broke, or the client breached it.
     pub fn next_request(&mut self) -> Result<Option<(u32, Request)>, NetError> {
         loop {
+            if let Some(taken) = self.finished()? {
+                return Ok(Some(taken));
+            }
+            if !self.read_frame()? {
+                return Ok(None);
+            }
+        }
+    }
+
+    /// A request whose stream the client has ended and that is not yet
+    /// taken, without reading: `None` where every one read is taken. For a
+    /// server that waits on the socket's readiness and reads only when it
+    /// says so ([`Server::read_frame`]); [`Server::next_request`] is the
+    /// two in a loop.
+    ///
+    /// # Errors
+    ///
+    /// Where the connection broke answering a malformed request's stream.
+    pub fn finished(&mut self) -> Result<Option<(u32, Request)>, NetError> {
+        loop {
             let ready = self
                 .connection
                 .streams
@@ -83,10 +103,18 @@ impl<S: Read + Write> Server<S> {
                 self.connection.streams.remove(&id);
                 continue;
             }
-            if self.connection.goaway.is_some() || !self.connection.pump()? {
-                return Ok(None);
-            }
+            return Ok(None);
         }
+    }
+
+    /// Read and handle one frame: `false` where the client went away or
+    /// closed the connection.
+    ///
+    /// # Errors
+    ///
+    /// Where the connection broke, or the client breached it.
+    pub fn read_frame(&mut self) -> Result<bool, NetError> {
+        Ok(self.connection.goaway.is_none() && self.connection.pump()?)
     }
 
     /// Answer the request taken off `stream` with `response`: its head,
