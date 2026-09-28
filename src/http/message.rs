@@ -2,11 +2,11 @@
 //! the framing its body needs, the body and, where it has one, the
 //! trailer.
 
-use std::fmt::Write as _;
 use std::io::Write;
 
 use super::find;
 use crate::NetError;
+use crate::head::write_fields;
 
 /// One message as it is written: its first line, headers, body and
 /// trailer.
@@ -19,25 +19,25 @@ pub(super) struct Message<'a> {
     /// its headers name no `Connection` of their own; HTTP/1.1 keeps it
     /// otherwise.
     pub(super) close: bool,
+    /// Whether the message is an answer that carries no body and states
+    /// no length: a 1xx, a 204 or a 304.
+    pub(super) bodiless: bool,
 }
 
 /// One message: its first line, its headers, the length, the connection
 /// closing where the message asks and no header says otherwise, the blank
 /// line and the body —
 /// or, where it has a trailer, the body as one chunk and the trailer after
-/// the last.
+/// the last; an answer that carries no body writes no length and no body.
 pub(super) fn write_message(
     writer: &mut impl Write,
     message: &Message<'_>,
     what: &str,
 ) -> Result<(), NetError> {
     let lines = |fields: &[(String, String)]| {
-        fields
-            .iter()
-            .fold(String::new(), |mut lines, (name, value)| {
-                let _ = write!(lines, "{name}: {value}\r\n");
-                lines
-            })
+        let mut lines = String::new();
+        write_fields(&mut lines, fields);
+        lines
     };
     let close = if message.close && find(message.headers, "connection").is_none() {
         "Connection: close\r\n"
@@ -46,7 +46,9 @@ pub(super) fn write_message(
     };
     let (first, fields, body) = (message.first, lines(message.headers), message.body);
     let length = body.len();
-    let (head, tail) = if message.trailers.is_empty() {
+    let (head, tail) = if message.bodiless {
+        (format!("{first}\r\n{fields}{close}\r\n"), String::new())
+    } else if message.trailers.is_empty() {
         let head = format!("{first}\r\n{fields}Content-Length: {length}\r\n{close}\r\n");
         (head, String::new())
     } else {
@@ -59,6 +61,7 @@ pub(super) fn write_message(
         let end = if body.is_empty() { "" } else { "\r\n" };
         (head, format!("{end}0\r\n{}\r\n", lines(message.trailers)))
     };
+    let body = if message.bodiless { &[][..] } else { body };
     writer
         .write_all(head.as_bytes())
         .and_then(|()| writer.write_all(body))

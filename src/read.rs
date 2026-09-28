@@ -7,17 +7,21 @@
 //! [`until`] and [`to_end`] stop at a ceiling the caller names, and [`line`]
 //! reads the line-oriented protocols' lines under [`MAX_LINE`], with one
 //! policy for bytes that are not UTF-8: refused, never repaired, so what a
-//! line says is what the peer sent.
+//! line says is what the peer sent. [`header`] reads a framed protocol's
+//! fixed header, or nothing where the peer closed between messages.
 //!
 //! One copy. Until 2026-09-27 the head reader here, STOMP, FTP, IMAP, SMTP,
 //! POP3, NATS, RESP, the SSH identification, syslog, MLLP and the
 //! dot-stuffed block each read lines themselves, none of them bounded, under
 //! three different UTF-8 policies; and TCP, a Unix socket, a named pipe and
-//! FTP's data connection each read a connection to its end unbounded.
+//! FTP's data connection each read a connection to its end unbounded; and
+//! AMQP, IBM MQ, NFS, OPC UA, Oracle TNS and SMB each told a clean close
+//! from a broken header themselves, taking a header cut short for a close.
 
 use std::io::{BufRead, ErrorKind, Read};
 
 use crate::NetError;
+use crate::ceiling::within;
 
 /// The longest line read, its line ending included: far over any line a
 /// protocol writes for itself, far under what would hurt to hold.
@@ -52,9 +56,7 @@ pub fn until(
             Some(at) => (at + 1, true),
             None => (available.len(), false),
         };
-        if into.len() + take > ceiling {
-            return Err(over(ceiling));
-        }
+        within(into.len() + take, ceiling, "Xmip reads to one delimiter")?;
         into.extend_from_slice(&available[..take]);
         reader.consume(take);
         if found {
@@ -97,18 +99,36 @@ pub fn to_end(reader: &mut impl Read, ceiling: usize) -> Result<Vec<u8>, NetErro
         .take(limit)
         .read_to_end(&mut bytes)
         .map_err(|failed| NetError::from_io("reading a connection to its end", &failed))?;
-    if bytes.len() > ceiling {
-        return Err(over(ceiling));
-    }
+    within(bytes.len(), ceiling, "Xmip reads to a connection's end")?;
     Ok(bytes)
 }
 
-/// The refusal of a peer that sent more than `ceiling` before the end read
-/// to.
-fn over(ceiling: usize) -> NetError {
-    NetError::new(format!(
-        "more than {ceiling} bytes arrived before the end Xmip reads to"
-    ))
+/// A header of `N` bytes whole, or `None` where the connection ended
+/// cleanly before its first byte: how a framed protocol tells a peer that
+/// is done from one that broke off.
+///
+/// # Errors
+///
+/// Where the connection could not be read, or ended inside the header.
+pub fn header<const N: usize>(
+    reader: &mut impl Read,
+    what: &str,
+) -> Result<Option<[u8; N]>, NetError> {
+    let mut bytes = [0u8; N];
+    let mut filled = 0;
+    while filled < N {
+        match reader.read(&mut bytes[filled..]) {
+            Ok(0) if filled == 0 => return Ok(None),
+            Ok(0) => {
+                let ended = std::io::Error::from(ErrorKind::UnexpectedEof);
+                return Err(NetError::from_io(&format!("reading {what}"), &ended));
+            }
+            Ok(read) => filled += read,
+            Err(failed) if failed.kind() == ErrorKind::Interrupted => {}
+            Err(failed) => return Err(NetError::from_io(&format!("reading {what}"), &failed)),
+        }
+    }
+    Ok(Some(bytes))
 }
 
 /// `raw` without exactly one trailing line ending, CRLF or LF.
@@ -177,6 +197,20 @@ mod tests {
         let mut small = Vec::new();
         assert!(until(&mut &b"0123456789"[..], 0, 4, &mut small).is_err());
         assert!(small.is_empty(), "nothing past the ceiling was taken");
+    }
+
+    #[test]
+    fn a_header_is_whole_or_nothing_at_a_clean_close_and_cut_short_is_refused() {
+        let mut two = &b"abcd"[..];
+        assert_eq!(header::<2>(&mut two, "a").expect("first"), Some(*b"ab"));
+        assert_eq!(header::<2>(&mut two, "a").expect("second"), Some(*b"cd"));
+        assert_eq!(header::<2>(&mut two, "a").expect("closed"), None);
+        let failure = header::<4>(&mut &b"ab"[..], "a frame header").expect_err("cut");
+        assert_eq!(failure.io, Some(ErrorKind::UnexpectedEof));
+        assert!(
+            failure.message.starts_with("reading a frame header"),
+            "{failure}"
+        );
     }
 
     #[test]

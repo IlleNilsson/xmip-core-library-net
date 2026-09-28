@@ -6,17 +6,17 @@ use super::error::{ErrorCode, Violation};
 use super::frame::{DEFAULT_MAX_FRAME_SIZE, MAX_FRAME_SIZE_LIMIT, MAX_STREAM_ID};
 
 /// `SETTINGS_HEADER_TABLE_SIZE`.
-pub const HEADER_TABLE_SIZE: u16 = 0x1;
+const HEADER_TABLE_SIZE: u16 = 0x1;
 /// `SETTINGS_ENABLE_PUSH`.
-pub const ENABLE_PUSH: u16 = 0x2;
+const ENABLE_PUSH: u16 = 0x2;
 /// `SETTINGS_MAX_CONCURRENT_STREAMS`.
-pub const MAX_CONCURRENT_STREAMS: u16 = 0x3;
+const MAX_CONCURRENT_STREAMS: u16 = 0x3;
 /// `SETTINGS_INITIAL_WINDOW_SIZE`.
-pub const INITIAL_WINDOW_SIZE: u16 = 0x4;
+const INITIAL_WINDOW_SIZE: u16 = 0x4;
 /// `SETTINGS_MAX_FRAME_SIZE`.
-pub const MAX_FRAME_SIZE: u16 = 0x5;
+const MAX_FRAME_SIZE: u16 = 0x5;
 /// `SETTINGS_MAX_HEADER_LIST_SIZE`.
-pub const MAX_HEADER_LIST_SIZE: u16 = 0x6;
+const MAX_HEADER_LIST_SIZE: u16 = 0x6;
 
 /// The window every stream and the connection start with.
 pub const DEFAULT_WINDOW: u32 = 65_535;

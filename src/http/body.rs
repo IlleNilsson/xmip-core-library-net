@@ -75,10 +75,5 @@ fn unchunk(reader: &mut impl BufRead) -> Result<(Vec<u8>, Vec<String>), NetError
 /// Refuse a body of `length` over [`MAX_BODY`], before it is allocated
 /// where the length is known first.
 fn within(length: usize) -> Result<(), NetError> {
-    if length > MAX_BODY {
-        return Err(NetError::new(format!(
-            "a body of {length} bytes, over the {MAX_BODY} bytes Xmip reads"
-        )));
-    }
-    Ok(())
+    crate::ceiling::within(length, MAX_BODY, "Xmip reads in one body")
 }

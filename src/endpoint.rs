@@ -4,12 +4,47 @@
 //!
 //! One reading. Until 2026-09-25 the http transport read its targets with a
 //! parser of its own, `HttpTarget`, beside this one, and the Peppol loopback
-//! cut a path off a URL a third way.
+//! cut a path off a URL a third way. Until 2026-09-28 AS2, AS4, `WebDAV`
+//! and MSMQ each rewrote their own schemes to `http://` before reading;
+//! a technology now declares its [`Schemes`] and this reading maps them,
+//! through the one [`crate::Target`].
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 
 use crate::NetError;
 use crate::authority;
+use crate::target::Target;
+
+/// The schemes an endpoint is written in: `http://` and `https://`, and
+/// the ones a technology riding on HTTP declares for them — `as4://` for
+/// the one and `as4s://` for the other — so the one reading maps them and
+/// no technology rewrites a URL.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Schemes {
+    /// The schemes that are `http://` on the wire.
+    pub plain: &'static [&'static str],
+    /// The schemes that are `https://` on the wire.
+    pub secure: &'static [&'static str],
+}
+
+impl Schemes {
+    /// HTTP's own two.
+    pub const HTTP: Self = Self {
+        plain: &["http"],
+        secure: &["https"],
+    };
+
+    /// The schemes as a refusal names them: `http:// or https://`.
+    fn named(&self) -> String {
+        let named: Vec<String> = self
+            .plain
+            .iter()
+            .chain(self.secure)
+            .map(|scheme| format!("{scheme}://"))
+            .collect();
+        format!("an {} URL", named.join(" or "))
+    }
+}
 
 /// An `http://` or `https://` URL: the host, the port, and the path under
 /// it.
@@ -22,36 +57,43 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
-    /// Read `url`: `/` where it names no path, and the scheme's port — 80,
-    /// or 443 for `https://` — where it names none and [`Self::or_port`]
-    /// gives none.
+    /// Read `url`, an `http://` or `https://` URL: `/` where it names no
+    /// path, and the scheme's port — 80, or 443 for `https://` — where it
+    /// names none and [`Self::or_port`] gives none.
     ///
     /// # Errors
     ///
-    /// Refuses a scheme that is neither `http://` nor `https://`, and an
-    /// authority [`authority::parse`] refuses.
+    /// As [`Self::parse_under`] with [`Schemes::HTTP`].
     pub fn parse(url: &str) -> Result<Self, NetError> {
-        let (secure, rest) = if let Some(rest) = url.strip_prefix("https://") {
-            (true, rest)
-        } else if let Some(rest) = url.strip_prefix("http://") {
-            (false, rest)
-        } else {
-            return Err(NetError::new(format!(
-                "'{url}' is not an http:// or https:// URL"
-            )));
-        };
-        let (written, path) = match rest.find('/') {
-            Some(at) => (&rest[..at], &rest[at..]),
-            None => (rest, "/"),
-        };
-        let (host, port) = authority::parse(written)
-            .map_err(|failed| NetError::new(format!("'{url}': {failed}")))?;
+        Self::parse_under(url, &Schemes::HTTP)
+    }
+
+    /// Read `url` under the schemes a technology riding on HTTP declares:
+    /// `as2://` is `http://` on the wire, and `as2s://` is `https://`.
+    /// The fragment never travels and is dropped; the query stays on the
+    /// path.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a scheme `schemes` does not name, and an authority
+    /// [`authority::parse`] refuses.
+    pub fn parse_under(url: &str, schemes: &Schemes) -> Result<Self, NetError> {
+        let target = Target::parse(url)
+            .ok()
+            .filter(|target| target.is(schemes.plain) || target.is(schemes.secure))
+            .ok_or_else(|| NetError::new(format!("'{url}' is not {}", schemes.named())))?;
+        let (host, port) = target.host_and_port()?;
+        let path = &target.absolute()[target.root().len()..];
 
         Ok(Self {
-            secure,
+            secure: target.is(schemes.secure),
             host: host.to_string(),
             port,
-            path: path.to_string(),
+            path: if path.starts_with('/') {
+                path.to_string()
+            } else {
+                format!("/{path}")
+            },
         })
     }
 
@@ -220,6 +262,35 @@ mod tests {
         assert!(refused("http:///orders").contains("names no host"));
         assert!(refused("http://opa.example:agent").contains("a port that is not one"));
         assert!(refused("http://[::1:8181").contains("bracket"));
+    }
+
+    #[test]
+    fn a_technology_s_own_schemes_are_mapped_to_http_by_the_one_reading() {
+        const AS2: Schemes = Schemes {
+            plain: &["http", "as2"],
+            secure: &["https", "as2s"],
+        };
+        let plain = Endpoint::parse_under("as2://partner:4080/as2?x=1#f", &AS2).expect("as2");
+        let secure = Endpoint::parse_under("AS2S://partner/as2", &AS2).expect("as2s");
+
+        assert_eq!(
+            (plain.secure(), plain.port(), plain.path()),
+            (false, 4080, "/as2?x=1")
+        );
+        assert_eq!((secure.secure(), secure.port()), (true, 443));
+        assert_eq!(read("http://h?x=1").path(), "/?x=1");
+        assert_eq!(read("http://user@h/x").host(), "h");
+        let refused = Endpoint::parse_under("as4://h/x", &AS2).expect_err("not as2");
+        assert!(
+            refused
+                .message
+                .contains("http:// or as2:// or https:// or as2s://"),
+            "{refused}"
+        );
+        assert!(
+            Endpoint::parse("as2://h/x").is_err(),
+            "HTTP alone knows no alias"
+        );
     }
 
     #[test]

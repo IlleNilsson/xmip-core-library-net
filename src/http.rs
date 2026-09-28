@@ -34,11 +34,12 @@
 use std::io::{BufRead, BufReader, Read, Write};
 
 use crate::NetError;
-use crate::head::read_head;
-use crate::percent::{decode, encode};
+use crate::head::{fields, read_head};
+use crate::percent::{decode_pairs, encode_pairs};
 use message::{Message, write_message};
 
 mod body;
+pub mod date;
 mod message;
 mod response;
 mod version;
@@ -114,12 +115,7 @@ impl Request {
         if self.query.is_empty() {
             return self.path.clone();
         }
-        let query: Vec<String> = self
-            .query
-            .iter()
-            .map(|(name, value)| format!("{}={}", encode(name, false), encode(value, false)))
-            .collect();
-        format!("{}?{}", self.path, query.join("&"))
+        format!("{}?{}", self.path, encode_pairs(&self.query))
     }
 }
 
@@ -152,8 +148,7 @@ pub fn exchange_kept<S: Read + Write>(
     let closed = answer
         .header_value("connection")
         .is_some_and(|said| said.eq_ignore_ascii_case("close"));
-    let bodiless = answer.status < 200 || answer.status == 204 || answer.status == 304;
-    let framed = bodiless
+    let framed = bodiless(answer.status)
         || answer.header_value("content-length").is_some()
         || answer.header_value("transfer-encoding").is_some();
     Ok((answer, framed && !closed))
@@ -179,6 +174,7 @@ fn write(writer: &mut impl Write, request: &Request, close: bool) -> Result<(), 
         body: &request.body,
         trailers: &[],
         close,
+        bodiless: false,
     };
     write_message(writer, &message, "the request")
 }
@@ -202,6 +198,7 @@ pub fn write_response(writer: &mut impl Write, response: &Response) -> Result<()
         body: &response.body,
         trailers: &response.trailers,
         close: true,
+        bodiless: bodiless(response.status),
     };
     write_message(writer, &message, "the answer")
 }
@@ -228,8 +225,7 @@ pub fn read_response(reader: &mut impl BufRead) -> Result<Response, NetError> {
         .filter(|code| code.len() == 3)
         .and_then(|code| code.parse::<u16>().ok())
         .ok_or_else(not_http)?;
-    let bodiless = status < 200 || status == 204 || status == 304;
-    let (body, trailer) = if bodiless {
+    let (body, trailer) = if bodiless(status) {
         (Vec::new(), Vec::new())
     } else {
         body::read(reader, &head, true)?
@@ -237,9 +233,9 @@ pub fn read_response(reader: &mut impl BufRead) -> Result<Response, NetError> {
     Ok(Response {
         status,
         reason: words.next().unwrap_or_default().to_string(),
-        headers: headers_of(&head[1..]),
+        headers: fields(&head[1..]),
         body,
-        trailers: headers_of(&trailer),
+        trailers: fields(&trailer),
     })
 }
 
@@ -267,7 +263,7 @@ pub fn read_request(reader: &mut impl BufRead) -> Result<Option<Request>, NetErr
         method: method.to_string(),
         path,
         query,
-        headers: headers_of(&head[1..]),
+        headers: fields(&head[1..]),
         body,
     }))
 }
@@ -277,15 +273,13 @@ pub fn read_request(reader: &mut impl BufRead) -> Result<Option<Request>, NetErr
 #[must_use]
 pub fn split_target(target: &str) -> (String, Vec<(String, String)>) {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    let query = query
-        .split('&')
-        .filter(|pair| !pair.is_empty())
-        .map(|pair| {
-            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-            (decode(name), decode(value))
-        })
-        .collect();
-    (path.to_string(), query)
+    (path.to_string(), decode_pairs(query))
+}
+
+/// Whether an answer of `status` carries no body and states no length:
+/// a 1xx, a 204 or a 304 (RFC 9110 sections 6.4.1 and 8.6).
+const fn bodiless(status: u16) -> bool {
+    status < 200 || status == 204 || status == 304
 }
 
 /// The phrase a status is written with; one the table does not know is
@@ -293,6 +287,7 @@ pub fn split_target(target: &str) -> (String, Vec<(String, String)>) {
 #[must_use]
 pub const fn reason(status: u16) -> &'static str {
     match status {
+        101 => "Switching Protocols",
         200 => "OK",
         201 => "Created",
         202 => "Accepted",
@@ -312,15 +307,6 @@ pub const fn reason(status: u16) -> &'static str {
         503 => "Service Unavailable",
         _ => "Status",
     }
-}
-
-/// Header lines as names and values.
-fn headers_of(lines: &[String]) -> Vec<(String, String)> {
-    lines
-        .iter()
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_string(), value.trim().to_string()))
-        .collect()
 }
 
 /// One header's value, however the peer capitalised it.
@@ -435,6 +421,22 @@ mod tests {
         let refused = binary.text().expect_err("not text");
         assert!(refused.to_string().contains("not UTF-8"), "{refused}");
         assert_eq!(binary.body, [0x7b, 0xff, 0xfe, 0x7d]);
+    }
+
+    #[test]
+    fn an_answer_without_a_body_states_no_length() {
+        let mut written = Vec::new();
+        let switching = Response::new(101)
+            .header("Upgrade", "websocket")
+            .header("Connection", "Upgrade");
+        write_response(&mut written, &switching).expect("written");
+        assert_eq!(
+            written,
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+        );
+        let read = read_response(&mut &written[..]).expect("read");
+        assert_eq!(read.status, 101);
+        assert_eq!(read.header_value("upgrade"), Some("websocket"));
     }
 
     #[test]
