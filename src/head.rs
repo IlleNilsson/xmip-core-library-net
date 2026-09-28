@@ -18,7 +18,7 @@ use crate::NetError;
 use crate::read;
 
 /// The largest number of header lines read before giving up.
-pub const MAX_HEADERS: usize = 200;
+const MAX_HEADERS: usize = 200;
 
 /// Read the lines before the blank line that ends a head. A connection
 /// that closes first ends it too, so a peer that sent nothing reads as no
@@ -64,6 +64,30 @@ pub fn header<'a>(lines: &'a [String], name: &str) -> Option<&'a str> {
     })
 }
 
+/// Header lines as names and values, each trimmed; a line without a colon
+/// is not a header and is passed over. The lines after the first of a
+/// head [`read_head`] read, or a trailer's.
+#[must_use]
+pub fn fields(lines: &[String]) -> Vec<(String, String)> {
+    lines
+        .iter()
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.trim().to_string(), value.trim().to_string()))
+        .collect()
+}
+
+/// `fields` appended to `head` as they are written, `name: value` and a
+/// CRLF each; the blank line that ends a head is the caller's, after
+/// whatever framing it adds.
+pub fn write_fields(head: &mut String, fields: &[(String, String)]) {
+    for (name, value) in fields {
+        head.push_str(name);
+        head.push_str(": ");
+        head.push_str(value);
+        head.push_str("\r\n");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,6 +110,21 @@ mod tests {
         let head = vec!["GET http://x/y HTTP/1.1".to_string()];
 
         assert_eq!(header(&head, "http"), None);
+    }
+
+    #[test]
+    fn fields_are_written_as_they_are_read() {
+        let written = vec![
+            ("Host".to_string(), "x".to_string()),
+            ("EXT".to_string(), String::new()),
+        ];
+        let mut head = String::from("NOTIFY * HTTP/1.1\r\n");
+        write_fields(&mut head, &written);
+        assert_eq!(head, "NOTIFY * HTTP/1.1\r\nHost: x\r\nEXT: \r\n");
+        head.push_str("\r\n");
+        let read = read_head(&mut head.as_bytes()).expect("read");
+        assert_eq!(fields(&read[1..]), written);
+        assert!(fields(&["no colon".to_string()]).is_empty());
     }
 
     #[test]

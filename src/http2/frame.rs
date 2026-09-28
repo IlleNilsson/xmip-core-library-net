@@ -27,7 +27,7 @@ pub const ACK: u8 = 0x1;
 /// `END_HEADERS`, on `HEADERS`, `PUSH_PROMISE` and `CONTINUATION`.
 pub const END_HEADERS: u8 = 0x4;
 /// `PADDED`, on `DATA`, `HEADERS` and `PUSH_PROMISE`.
-pub const PADDED: u8 = 0x8;
+const PADDED: u8 = 0x8;
 /// `PRIORITY`, on `HEADERS`.
 pub const PRIORITY: u8 = 0x20;
 

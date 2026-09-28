@@ -78,6 +78,36 @@ pub fn decode_strict(text: &[u8]) -> Result<Vec<u8>, BrokenEscape> {
     walk(text, true)
 }
 
+/// `name=value` pairs joined by `&` — a URI's query, or a form body —
+/// each name and value [`decode`]d; a pair without `=` has an empty
+/// value, and an empty pair is skipped.
+#[must_use]
+pub fn decode_pairs(text: &str) -> Vec<(String, String)> {
+    text.split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (decode(name), decode(value))
+        })
+        .collect()
+}
+
+/// `pairs` as `name=value&…`, each name and value [`encode`]d: the query
+/// or form body [`decode_pairs`] reads back.
+#[must_use]
+pub fn encode_pairs<N: AsRef<str>, V: AsRef<str>>(pairs: &[(N, V)]) -> String {
+    let mut out = String::new();
+    for (name, value) in pairs {
+        if !out.is_empty() {
+            out.push('&');
+        }
+        out.push_str(&encode(name.as_ref(), false));
+        out.push('=');
+        out.push_str(&encode(value.as_ref(), false));
+    }
+    out
+}
+
 /// The one walk: each escape decoded, and a broken one refused where
 /// `strict` says so and kept as written where it does not.
 fn walk(text: &[u8], strict: bool) -> Result<Vec<u8>, BrokenEscape> {
@@ -132,6 +162,22 @@ mod tests {
         assert_eq!(decode("%zz%4"), "%zz%4");
         assert_eq!(decode("%+f"), "%+f", "a sign is not a hex digit");
         assert_eq!(decode("a+b"), "a+b", "a plus is the form's, not the URI's");
+    }
+
+    #[test]
+    fn pairs_are_decoded_and_encoded_as_one_query() {
+        assert_eq!(
+            decode_pairs("prefix=in%2F&&flag&a%20b=c+d"),
+            [
+                ("prefix".to_string(), "in/".to_string()),
+                ("flag".to_string(), String::new()),
+                ("a b".to_string(), "c+d".to_string()),
+            ]
+        );
+        let written = encode_pairs(&[("Action", "Send Message"), ("to", "a&b=c")]);
+        assert_eq!(written, "Action=Send%20Message&to=a%26b%3Dc");
+        assert_eq!(decode_pairs(&written)[1], ("to".into(), "a&b=c".into()));
+        assert!(decode_pairs("").is_empty());
     }
 
     #[test]

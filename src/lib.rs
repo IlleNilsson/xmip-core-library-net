@@ -4,9 +4,12 @@
 //! as a transport writes it ([`address`]), an authority as a URI writes it
 //! ([`authority`]), a network in prefix notation ([`Network`]), a hardware
 //! address in IEEE 802 notation ([`mac`]), percent-encoding ([`percent`]),
-//! a filesystem path as a URI's path ([`uri`]), a TCP connection to every
+//! a target as a URI writes it — scheme, authority, path, query and
+//! fragment — read once ([`Target`]), a filesystem path as a URI's path
+//! ([`uri`]), a TCP connection to every
 //! address a peer resolves to in turn ([`connect`]), reading off a connection
-//! under a ceiling ([`read`]), a head as the line-oriented protocols write
+//! under a ceiling ([`read`]) and the one refusal of a size over a ceiling
+//! ([`ceiling`]), a head as the line-oriented protocols write
 //! it ([`head`]), the code their replies open with ([`reply`]), the most a
 //! connection is read for ([`MAX_BODY`]), and HTTP on the wire, both
 //! halves, with the exchange of a request for its answer: HTTP/1.1
@@ -24,10 +27,14 @@
 //! second HTTP/1.1 codec and a second URL reader, and the transport
 //! capability the head reader.
 //! Until 2026-09-27 a dozen technologies read lines themselves, unbounded,
-//! and eleven restated the body ceiling.
+//! and eleven restated the body ceiling. Until 2026-09-28 the transport
+//! capability worded the refusal of a size over a ceiling, and this crate's
+//! reader and HTTP body each worded their own; and twenty technologies
+//! read their targets' schemes, and ten their queries, by hand.
 
 pub mod address;
 pub mod authority;
+pub mod ceiling;
 mod connect;
 mod endpoint;
 pub mod head;
@@ -38,11 +45,13 @@ mod network;
 pub mod percent;
 pub mod read;
 pub mod reply;
+mod target;
 pub mod uri;
 
 pub use connect::connect;
-pub use endpoint::Endpoint;
+pub use endpoint::{Endpoint, Schemes};
 pub use network::Network;
+pub use target::Target;
 
 /// The largest single Stream, body or message Xmip reads off one connection,
 /// whatever frames it: a peer claiming four gigabytes must not get four
@@ -51,8 +60,9 @@ pub use network::Network;
 /// carries is this one.
 pub const MAX_BODY: usize = 64 * 1024 * 1024;
 
-/// Why text is not the address or network it was read as, or why a
-/// connection did not give the answer asked of it.
+/// Why text is not the address or network it was read as, why a connection
+/// did not give the answer asked of it, or why what a peer sent is not what
+/// its protocol says — HTTP here, SSH in `xmip-core-library-ssh`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NetError {
     /// What was wrong, in words.
@@ -89,3 +99,11 @@ impl core::fmt::Display for NetError {
 }
 
 impl core::error::Error for NetError {}
+
+/// Bytes a peer sent that are not the encoding its protocol says: the
+/// peer's failure, never the connection's, so nothing retries it.
+impl From<codec::CodecError> for NetError {
+    fn from(error: codec::CodecError) -> Self {
+        Self::new(error.message)
+    }
+}
