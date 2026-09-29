@@ -270,8 +270,8 @@ mod tests {
             plain: &["http", "as2"],
             secure: &["https", "as2s"],
         };
-        let plain = Endpoint::parse_under("as2://partner:4080/as2?x=1#f", &AS2).expect("as2");
-        let secure = Endpoint::parse_under("AS2S://partner/as2", &AS2).expect("as2s");
+        let plain = Endpoint::parse_under("as2://party:4080/as2?x=1#f", &AS2).expect("as2");
+        let secure = Endpoint::parse_under("AS2S://party/as2", &AS2).expect("as2s");
 
         assert_eq!(
             (plain.secure(), plain.port(), plain.path()),

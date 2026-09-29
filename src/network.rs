@@ -126,6 +126,6 @@ mod tests {
     fn a_prefix_too_long_for_the_family_is_refused() {
         assert!(Network::parse("10.0.0.0/33").is_err());
         assert!(Network::parse("2001:db8::/129").is_err());
-        assert!(Network::parse("partner-x.example").is_err());
+        assert!(Network::parse("party-x.example").is_err());
     }
 }
