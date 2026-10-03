@@ -8,7 +8,8 @@
 //! fragment — read once ([`Target`]), a filesystem path as a URI's path
 //! ([`uri`]), a TCP connection to every
 //! address a peer resolves to in turn ([`connect`]), reading off a connection
-//! under a ceiling ([`read`]) and the one refusal of a size over a ceiling
+//! under a ceiling ([`read`]), a length-prefixed frame as Xmip's node-to-node
+//! protocols write one ([`frame`]) and the one refusal of a size over a ceiling
 //! ([`ceiling`]), a head as the line-oriented protocols write
 //! it ([`head`]), the code their replies open with ([`reply`]), the most a
 //! connection is read for ([`MAX_BODY`]), and HTTP on the wire, both
@@ -37,6 +38,7 @@ pub mod authority;
 pub mod ceiling;
 mod connect;
 mod endpoint;
+pub mod frame;
 pub mod head;
 pub mod http;
 pub mod http2;
