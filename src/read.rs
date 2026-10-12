@@ -15,7 +15,7 @@
 //! dot-stuffed block each read lines themselves, none of them bounded, under
 //! three different UTF-8 policies; and TCP, a Unix socket, a named pipe and
 //! FTP's data connection each read a connection to its end unbounded; and
-//! AMQP, IBM MQ, NFS, OPC UA, Oracle TNS and SMB each told a clean close
+//! AMQP, IBM MQ, NFS, OPC UA and SMB each told a clean close
 //! from a broken header themselves, taking a header cut short for a close.
 
 use std::io::{BufRead, ErrorKind, Read};
