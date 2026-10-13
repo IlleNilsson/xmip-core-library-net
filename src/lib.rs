@@ -16,7 +16,8 @@
 //! halves, with the exchange of a request for its answer: HTTP/1.1
 //! ([`http`], to an [`Endpoint`]) and HTTP/2 with its header compression
 //! ([`http2`]), and gRPC's framing of a message on it ([`grpc`]); and a
-//! long-lived connection read until its side ends ([`watched`]).
+//! long-lived connection read until its side ends ([`watched`]); and where
+//! a named local endpoint is on this system ([`pipe`]).
 //!
 //! Until 2026-09-22 identification and authorization each carried a network
 //! type, and authorization read the peer's address under `address` while
@@ -47,6 +48,7 @@ pub mod http2;
 pub mod mac;
 mod network;
 pub mod percent;
+pub mod pipe;
 pub mod read;
 pub mod reply;
 mod target;
