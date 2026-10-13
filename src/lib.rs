@@ -15,7 +15,8 @@
 //! connection is read for ([`MAX_BODY`]), and HTTP on the wire, both
 //! halves, with the exchange of a request for its answer: HTTP/1.1
 //! ([`http`], to an [`Endpoint`]) and HTTP/2 with its header compression
-//! ([`http2`]), and gRPC's framing of a message on it ([`grpc`]).
+//! ([`http2`]), and gRPC's framing of a message on it ([`grpc`]); and a
+//! long-lived connection read until its side ends ([`watched`]).
 //!
 //! Until 2026-09-22 identification and authorization each carried a network
 //! type, and authorization read the peer's address under `address` while
@@ -50,6 +51,7 @@ pub mod read;
 pub mod reply;
 mod target;
 pub mod uri;
+pub mod watched;
 
 pub use connect::connect;
 pub use endpoint::{Endpoint, Schemes};

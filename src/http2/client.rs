@@ -107,6 +107,12 @@ impl<S: Read + Write> Client<S> {
         self.connection.goaway.is_some()
     }
 
+    /// What the connection rides on, for a caller that keeps state there —
+    /// a watched connection's clock of when its peer last spoke.
+    pub fn io_mut(&mut self) -> &mut S {
+        &mut self.connection.io
+    }
+
     /// How often a request's body waited for the server to open a window.
     #[must_use]
     pub const fn stalls(&self) -> usize {
