@@ -282,7 +282,7 @@ mod tests {
 
         assert_eq!(target.authority(), "plc:102");
         assert_eq!(target.path(), "");
-        assert!(target.segments().expect("none").is_empty());
+        assert_eq!(target.segments().expect("none"), [] as [&str; 0]);
         assert_eq!(target.query_value("dst-tsap").as_deref(), Some("0102"));
         assert_eq!(target.query_value("absent"), None);
     }

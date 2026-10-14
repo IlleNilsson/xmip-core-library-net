@@ -100,7 +100,7 @@ mod tests {
         assert_eq!(answer.header_value("content-type"), Some("text/plain"));
         assert_eq!(answer.trailer_value("x-checksum"), Some("3"));
         let empty = client.send(&Request::new("GET", "/")).expect("second");
-        assert!(empty.body.is_empty());
+        assert_eq!(empty.body, [] as [u8; 0]);
         client.ping().expect("pong");
         client.close();
         assert_eq!(far.join().expect("thread"), 2);

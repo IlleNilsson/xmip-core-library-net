@@ -170,6 +170,6 @@ mod tests {
         assert!(decode(&[0b0000_0111, 0xff]).is_err());
         // EOS itself, thirty ones.
         assert!(decode(&[0xff, 0xff, 0xff, 0xff]).is_err());
-        assert!(decode(&[]).expect("empty").is_empty());
+        assert_eq!(decode(&[]).expect("empty"), [] as [u8; 0]);
     }
 }
