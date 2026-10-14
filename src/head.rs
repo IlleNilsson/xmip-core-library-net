@@ -124,7 +124,10 @@ mod tests {
         head.push_str("\r\n");
         let read = read_head(&mut head.as_bytes()).expect("read");
         assert_eq!(fields(&read[1..]), written);
-        assert!(fields(&["no colon".to_string()]).is_empty());
+        assert_eq!(
+            fields(&["no colon".to_string()]),
+            [] as [(String, String); 0]
+        );
     }
 
     #[test]

@@ -177,7 +177,7 @@ mod tests {
         let written = encode_pairs(&[("Action", "Send Message"), ("to", "a&b=c")]);
         assert_eq!(written, "Action=Send%20Message&to=a%26b%3Dc");
         assert_eq!(decode_pairs(&written)[1], ("to".into(), "a&b=c".into()));
-        assert!(decode_pairs("").is_empty());
+        assert_eq!(decode_pairs(""), [] as [(String, String); 0]);
     }
 
     #[test]

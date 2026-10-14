@@ -461,7 +461,7 @@ mod tests {
         write_response(&mut answers, &Response::new(207).body(b"<a/>")).expect("written");
         assert!(answers.starts_with(b"HTTP/1.1 204 No Content\r\n"));
         let mut reader = &answers[..];
-        assert!(read_response(&mut reader).expect("204").body.is_empty());
+        assert_eq!(read_response(&mut reader).expect("204").body, [] as [u8; 0]);
         let multi = read_response(&mut reader).expect("207");
         assert_eq!((multi.status, multi.body.as_slice()), (207, &b"<a/>"[..]));
     }
@@ -516,11 +516,9 @@ mod tests {
             assert_eq!(back.body, body);
             assert_eq!(back.trailer_value("GRPC-Status"), Some("0"));
         }
-        assert!(
-            answer(b"HTTP/1.1 200 OK\r\n\r\n")
-                .expect("read")
-                .trailers
-                .is_empty()
+        assert_eq!(
+            answer(b"HTTP/1.1 200 OK\r\n\r\n").expect("read").trailers,
+            [] as [(String, String); 0]
         );
     }
 
@@ -530,7 +528,7 @@ mod tests {
 
         let first = read_request(&mut reader).expect("read").expect("one");
 
-        assert!(first.body.is_empty());
+        assert_eq!(first.body, [] as [u8; 0]);
         assert_eq!(
             read_request(&mut reader).expect("read").expect("two").path,
             "/next"

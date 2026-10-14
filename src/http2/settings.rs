@@ -168,7 +168,7 @@ mod tests {
         let mut read = Settings::default();
         read.apply(&ours, false).expect("applied");
         assert_eq!(read, Settings::ours());
-        assert!(Settings::default().encode().is_empty());
+        assert_eq!(Settings::default().encode(), [] as [u8; 0]);
     }
 
     #[test]
