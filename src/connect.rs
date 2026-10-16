@@ -80,9 +80,7 @@ mod tests {
     fn every_address_is_tried_and_the_one_that_answers_is_connected() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let open = listener.local_addr().expect("address");
-        let closed = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let refusing = closed.local_addr().expect("address");
-        drop(closed);
+        let refusing = crate::fixture::unheld();
         // Windows answers a refused loopback connect after its own retries,
         // about two seconds; the bound is generous for that.
 
@@ -106,9 +104,7 @@ mod tests {
         let nothing = connect(empty, Some(Duration::from_millis(50))).expect_err("empty");
         assert!(nothing.io.is_none(), "{nothing}");
 
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let address = listener.local_addr().expect("address");
-        drop(listener);
+        let address = crate::fixture::unheld();
         let refused = connect(address, Some(Duration::from_millis(500))).expect_err("refused");
         assert!(refused.io.is_some(), "{refused}");
         let unbounded = connect(address.to_string(), None).expect_err("refused");

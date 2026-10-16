@@ -16,6 +16,13 @@ path = "src/lib.rs"
 # Hex, which a MAC address and a percent escape are both spelled in.
 codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
 
+[features]
+# A loopback address no one holds (`fixture`), the estate's one for every
+# test that binds a port later or wants nothing listening. A crate asks for
+# it from its dev-dependencies, so it reaches tests and never a production
+# build.
+test-support = []
+
 [lints.rust]
 # forbid, not deny: a module has no business writing unsafe. The one exception
 # in the estate is xmip-core-abi, which holds the extern "C" vtable over
