@@ -17,7 +17,8 @@
 //! ([`http`], to an [`Endpoint`]) and HTTP/2 with its header compression
 //! ([`http2`]), and gRPC's framing of a message on it ([`grpc`]); and a
 //! long-lived connection read until its side ends ([`watched`]); and where
-//! a named local endpoint is on this system ([`pipe`]).
+//! a named local endpoint is on this system ([`pipe`]); and, for tests
+//! alone, a loopback address no one holds (`fixture`, `test-support`).
 //!
 //! Until 2026-09-22 identification and authorization each carried a network
 //! type, and authorization read the peer's address under `address` while
@@ -40,6 +41,8 @@ pub mod authority;
 pub mod ceiling;
 mod connect;
 mod endpoint;
+#[cfg(any(test, feature = "test-support"))]
+pub mod fixture;
 pub mod frame;
 pub mod grpc;
 pub mod head;

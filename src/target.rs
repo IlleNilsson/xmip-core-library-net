@@ -380,14 +380,22 @@ mod tests {
         use std::hint::black_box;
         use std::time::{Duration, Instant};
 
-        let began = Instant::now();
-        for _ in 0..10_000 {
-            let target = Target::under(&["mqtt"], black_box("mqtt://[::1]:1883/a/b?x=1#f"));
-            black_box(target.expect("read").segments().expect("segments"));
-        }
-        let took = began.elapsed();
-        // Generous for a debug build under load: five microseconds a read.
-        assert!(took < Duration::from_millis(50), "{took:?}");
+        // The fastest of five rounds is the read's own cost: a busy machine
+        // preempts some rounds, a slower read slows every one.
+        let fastest = (0..5)
+            .map(|_| {
+                let began = Instant::now();
+                for _ in 0..2_000 {
+                    let text = black_box("mqtt://[::1]:1883/a/b?x=1#f");
+                    let target = Target::under(&["mqtt"], text);
+                    black_box(target.expect("read").segments().expect("segments"));
+                }
+                began.elapsed()
+            })
+            .min()
+            .expect("five rounds");
+        // Generous for a debug build: five microseconds a read.
+        assert!(fastest < Duration::from_millis(10), "{fastest:?}");
     }
 
     #[test]
