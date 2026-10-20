@@ -5,6 +5,7 @@ is the gate's; how it is written and read is here.
 
 | Item | What it is |
 | --- | --- |
+| `accepting` | A listener's accept stopped: `woken` joins its thread once it has heard a knock, asked again for as long as it has not ended, `knock` connects to it, and `wakeable` is the loopback address a knock reaches a listener on every address at. The runtime's operate listener, the Storage node's server, the cluster's Event listener and the ACME challenge listener stop through it; until 2026-10-20 each knocked once, and a knock lost held a stop for good |
 | `address::parse` | An address as a transport writes it: bare, with a port, or IPv6 in brackets |
 | `Network` | A network in prefix notation, and whether an address is inside it |
 | `authority` | An authority as a URI writes it: `parse` into host and port, `host_of`, `with_default_port`, and `bracketed` for an IPv6 host in a `Host` header |
