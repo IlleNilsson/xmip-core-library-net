@@ -13,7 +13,7 @@
 //! reading what the peer sends, until a `WINDOW_UPDATE` opens it — and
 //! the errors of section 7 ([`error`]), a breach of a stream answered
 //! with `RST_STREAM` and of the connection with `GOAWAY`. A peer's
-//! `GOAWAY` is honoured: a stream above the last it names was not
+//! `GOAWAY` is honored: a stream above the last it names was not
 //! processed, and the request fails as refused rather than lost.
 //!
 //! Synchronous and hand-written, like every protocol in the estate: one

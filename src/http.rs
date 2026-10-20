@@ -93,7 +93,7 @@ impl Request {
         self
     }
 
-    /// One header's value, however it was capitalised.
+    /// One header's value, however it was capitalized.
     #[must_use]
     pub fn header_value(&self, name: &str) -> Option<&str> {
         find(&self.headers, name)
@@ -309,7 +309,7 @@ pub const fn reason(status: u16) -> &'static str {
     }
 }
 
-/// One header's value, however the peer capitalised it.
+/// One header's value, however the peer capitalized it.
 fn find<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     headers
         .iter()

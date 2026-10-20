@@ -94,7 +94,7 @@ mod tests {
     use std::fmt::Write;
 
     #[test]
-    fn a_header_is_found_however_the_peer_capitalised_it() {
+    fn a_header_is_found_however_the_peer_capitalized_it() {
         let head = vec![
             "POST /orders HTTP/1.1".to_string(),
             "content-length: 8".to_string(),
