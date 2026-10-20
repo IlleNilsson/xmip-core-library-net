@@ -50,13 +50,13 @@ impl Response {
         self
     }
 
-    /// One header's value, however it was capitalised.
+    /// One header's value, however it was capitalized.
     #[must_use]
     pub fn header_value(&self, name: &str) -> Option<&str> {
         find(&self.headers, name)
     }
 
-    /// One trailer field's value, however it was capitalised.
+    /// One trailer field's value, however it was capitalized.
     #[must_use]
     pub fn trailer_value(&self, name: &str) -> Option<&str> {
         find(&self.trailers, name)
