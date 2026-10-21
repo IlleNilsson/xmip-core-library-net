@@ -29,6 +29,7 @@
 //! [`Response`]: crate::http::Response
 //! [`Version`]: crate::http::Version
 
+mod boxed;
 mod client;
 mod connection;
 pub mod error;
@@ -42,6 +43,7 @@ pub mod settings;
 mod stream;
 pub mod window;
 
+pub use boxed::{Boxed, BoxedClient, BoxedServer, Duplex};
 pub use client::{Client, exchange};
 pub use preface::{PREFACE, Replayed, sniff};
 pub use server::{Server, serve};
