@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/IlleNilsson/xmip-core-library-net"
-description = "Network primitives the capabilities share, one copy of each: an address, a URI's authority, path and endpoint, a network in prefix notation, a MAC address, percent-encoding, a line-oriented head, and HTTP itself, both halves: HTTP/1.1, and HTTP/2 with HPACK, which the http transport and every capability asking a service speak."
+description = "Network primitives the capabilities share, one copy of each: an address, a URI's authority, path and endpoint, a network in prefix notation, a MAC address, percent-encoding, a line-oriented head, HTTP/1.1 and HTTP/2 with HPACK, both halves, and the named pipe the named pipe transport and the runtime's local endpoint share."
 
 [lib]
 path = "src/lib.rs"
@@ -15,6 +15,21 @@ path = "src/lib.rs"
 [dependencies]
 # Hex, which a MAC address and a percent escape are both spelled in.
 codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
+
+# The named pipe (`pipe`; ADR-0014, amendment 2026-10-21): on Windows made,
+# connected, read and written through the system's own calls, its security
+# descriptor written from SDDL, a client opened lent for identification
+# alone, the account it connected as and the identifier of an account
+# admitted (`pipe/windows/`). The named pipe transport and the runtime's
+# local endpoint both make theirs here.
+[target.'cfg(windows)'.dependencies]
+widestring = "1"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Pipes", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+
+# On Unix the transport's pipe is a FIFO, which the standard library does
+# not make; `nix` makes it with a safe call.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["fs"] }
 
 [features]
 # A loopback address no one holds (`fixture`), the estate's one for every
@@ -24,10 +39,11 @@ codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNil
 test-support = []
 
 [lints.rust]
-# forbid, not deny: a module has no business writing unsafe. The one exception
-# in the estate is xmip-core-abi, which holds the extern "C" vtable over
-# include/xmip_module.h and lowers this to deny with a reason at the call site.
-unsafe_code = "forbid"
+# deny, not forbid: the named pipe on Windows crosses a C interface in one
+# folder, `src/pipe/windows/`, each file lowering this at its top
+# (ADR-0050, amendment 2026-10-21; `test/Unsafe.Test.ps1` holds the
+# folder). Every other file of the crate writes no unsafe code.
+unsafe_code = "deny"
 
 [lints.clippy]
 # Warned, never denied. doc/governance/rust-style.md section 3: a function
