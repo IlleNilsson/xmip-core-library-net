@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 //! Network primitives the capabilities share, one copy of each: an address
 //! as a transport writes it ([`address`]), an authority as a URI writes it
 //! ([`authority`]), a network in prefix notation ([`Network`]), a hardware
@@ -16,8 +14,10 @@
 //! halves, with the exchange of a request for its answer: HTTP/1.1
 //! ([`http`], to an [`Endpoint`]) and HTTP/2 with its header compression
 //! ([`http2`]), and gRPC's framing of a message on it ([`grpc`]); and a
-//! long-lived connection read until its side ends ([`watched`]); and where
-//! a named local endpoint is on this system ([`pipe`]); and a listeners
+//! long-lived connection read until its side ends ([`watched`]); and a
+//! named local endpoint, where it is on this system and the named pipe
+//! itself, made, accepted, connected to, read and written ([`pipe`]); and a
+//! listener's
 //! accept woken by its stop until it has heard ([`accepting`]); and, for tests
 //! alone, a loopback address no one holds (`fixture`, `test-support`).
 //!
