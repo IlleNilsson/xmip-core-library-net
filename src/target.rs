@@ -18,7 +18,7 @@
 
 use crate::NetError;
 use crate::authority;
-use crate::percent::{decode, decode_pairs};
+use codec::percent::{decode, decode_pairs};
 
 /// A target as a URI writes it, borrowed from the text it was read from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

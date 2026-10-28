@@ -1,7 +1,7 @@
 //! Network primitives the capabilities share, one copy of each: an address
 //! as a transport writes it ([`address`]), an authority as a URI writes it
 //! ([`authority`]), a network in prefix notation ([`Network`]), a hardware
-//! address in IEEE 802 notation ([`mac`]), percent-encoding ([`percent`]),
+//! address in IEEE 802 notation ([`mac`]),
 //! a target as a URI writes it — scheme, authority, path, query and
 //! fragment — read once ([`Target`]), a filesystem path as a URI's path
 //! ([`uri`]), a TCP connection to every
@@ -52,7 +52,6 @@ pub mod http;
 pub mod http2;
 pub mod mac;
 mod network;
-pub mod percent;
 pub mod pipe;
 pub mod read;
 pub mod reply;
