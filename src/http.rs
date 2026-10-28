@@ -35,7 +35,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 
 use crate::NetError;
 use crate::head::{fields, read_head};
-use crate::percent::{decode_pairs, encode_pairs};
+use codec::percent::{decode_pairs, encode_pairs};
 use message::{Message, write_message};
 
 mod body;
