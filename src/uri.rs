@@ -31,10 +31,17 @@ pub fn path_of(path: &Path) -> String {
 /// them as separators.
 #[must_use]
 pub fn file_of(uri_path: &str) -> PathBuf {
+    PathBuf::from(file_text_of(uri_path))
+}
+
+/// [`file_of`] as text, borrowed from `uri_path`: what a `file://` address
+/// a Location is entered with names, before it is a path.
+#[must_use]
+pub fn file_text_of(uri_path: &str) -> &str {
     let bytes = uri_path.as_bytes();
     let drive =
         bytes.len() >= 3 && bytes[0] == b'/' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':';
-    PathBuf::from(if drive { &uri_path[1..] } else { uri_path })
+    if drive { &uri_path[1..] } else { uri_path }
 }
 
 #[cfg(test)]

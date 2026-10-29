@@ -20,6 +20,23 @@ use crate::NetError;
 use crate::authority;
 use codec::percent::{decode, decode_pairs};
 
+/// The scheme an address names where it writes none: a path, `/var/xmip/in`
+/// or `C:\xmip\in`, is a file's (RFC 8089).
+pub const PATH_SCHEME: &str = "file";
+
+/// The scheme `text` is entered with, lowercase — `sftp` of
+/// `SFTP://party-x@host/in` — or [`PATH_SCHEME`] where it opens with none:
+/// what chooses the technology a Location's address belongs to, as each
+/// technology declares its schemes (ADR-0064, amendment 2026-10-28). The
+/// one reading of it, for the runtime and every surface.
+#[must_use]
+pub fn scheme_of(text: &str) -> String {
+    Target::parse(text).map_or_else(
+        |_| PATH_SCHEME.to_string(),
+        |named| named.scheme().to_ascii_lowercase(),
+    )
+}
+
 /// A target as a URI writes it, borrowed from the text it was read from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Target<'a> {
@@ -406,6 +423,21 @@ mod tests {
         assert_eq!(target.segments().expect("segments"), ["orders", "payload"]);
         assert_eq!(target.query_value("x").as_deref(), Some("1"));
         assert!(Target::relative("db//c").segments().is_err());
+    }
+
+    #[test]
+    fn the_scheme_an_address_is_entered_with_is_read_lowercase_and_a_path_is_a_files() {
+        for (address, scheme) in [
+            ("SFTP://party-x@host:22/in", "sftp"),
+            ("https://party-x.example/orders", "https"),
+            ("ftps://host/out", "ftps"),
+            ("file:///var/xmip/in", "file"),
+            ("/var/xmip/in", PATH_SCHEME),
+            ("C:\\xmip\\in", PATH_SCHEME),
+            ("C:/xmip/in", PATH_SCHEME),
+        ] {
+            assert_eq!(scheme_of(address), scheme, "{address}");
+        }
     }
 
     #[test]
