@@ -62,7 +62,7 @@ pub mod watched;
 pub use connect::connect;
 pub use endpoint::{Endpoint, Schemes};
 pub use network::Network;
-pub use target::Target;
+pub use target::{PATH_SCHEME, Target, scheme_of};
 
 /// The largest single Stream, body or message Xmip reads off one connection,
 /// whatever frames it: a peer claiming four gigabytes must not get four
