@@ -85,6 +85,17 @@ pub fn openers(admit: &[String]) -> Result<String, String> {
     Ok(sddl)
 }
 
+/// The account this process runs as, `DOMAIN\user`, by its own token's
+/// word — the account a node's local endpoint would read from this process
+/// connecting (`Stream::caller`), and never what the environment says.
+///
+/// # Errors
+///
+/// Where Windows does not say.
+pub fn running_as() -> Result<String, String> {
+    account::account_name(&account::running_as()?)
+}
+
 /// The made end, waiting for a connection: the instance a client reaches
 /// next, and how to make the one after.
 pub struct Listener {
