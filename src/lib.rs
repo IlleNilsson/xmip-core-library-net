@@ -18,7 +18,9 @@
 //! named local endpoint, where it is on this system and the named pipe
 //! itself, made, accepted, connected to, read and written ([`pipe`]); and a
 //! listener's
-//! accept woken by its stop until it has heard ([`accepting`]); and, for tests
+//! accept woken by its stop until it has heard ([`accepting`]); and a login
+//! a server is offered, with the check it is handed to admit one
+//! ([`login`]); and, for tests
 //! alone, a loopback address no one holds (`fixture`, `test-support`).
 //!
 //! Until 2026-09-22 identification and authorization each carried a network
@@ -50,6 +52,7 @@ pub mod grpc;
 pub mod head;
 pub mod http;
 pub mod http2;
+pub mod login;
 pub mod mac;
 mod network;
 pub mod pipe;
