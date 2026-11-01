@@ -23,7 +23,7 @@ mod windows;
 #[cfg(unix)]
 pub use unix::{Listener, Stream, connect};
 #[cfg(windows)]
-pub use windows::{Cancel, IDENTIFICATION, Listener, Stream, connect, openers};
+pub use windows::{Cancel, IDENTIFICATION, Listener, Stream, connect, openers, running_as};
 
 /// The operating system's path for an endpoint called `name`: as given
 /// where it already is a path, `\\.\pipe\<name>` on Windows otherwise, and
@@ -167,6 +167,8 @@ mod tests {
         assert_eq!(level, IDENTIFICATION, "identification alone");
         let caller = served.caller().expect("named");
         assert!(caller.contains('\\'), "DOMAIN\\user: {caller}");
+        // This process's own account, by its token, is the one it lent.
+        assert_eq!(running_as().expect("this process's account"), caller);
         assert_eq!(served.peer_process(), Some(std::process::id()));
         let mut first = [0u8; 1];
         served.read_exact(&mut first).expect("what was read ahead");

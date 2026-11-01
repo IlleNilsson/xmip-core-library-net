@@ -1,6 +1,7 @@
-//! The accounts a pipe's descriptor admits and its client runs as: the
-//! token a client lent read on the thread standing in for it, the account
-//! a security identifier names, and the identifier of an account named.
+//! The accounts a pipe's descriptor admits, its client runs as and this
+//! process runs as: the token a client lent read on the thread standing in
+//! for it, this process's own token, the account a security identifier
+//! names, and the identifier of an account named.
 #![allow(unsafe_code)]
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
@@ -27,10 +28,50 @@ pub(crate) fn impersonated() -> Result<(Vec<u32>, i32), String> {
     read
 }
 
+/// The security identifier of the account this process runs as: its own
+/// token's user, by the operating system's word, never the environment's.
+///
+/// # Errors
+///
+/// Where Windows does not say.
+pub(crate) fn running_as() -> Result<Vec<u32>, String> {
+    use windows_sys::Win32::Security::TOKEN_QUERY;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: the current process's pseudo-handle, and a place for the token.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) } == 0 {
+        return Err(unknown("this process's token does not open"));
+    }
+    let read = user(token);
+    // SAFETY: opened above, closed once.
+    unsafe { CloseHandle(token) };
+    read
+}
+
 fn user_and_level(token: HANDLE) -> Result<(Vec<u32>, i32), String> {
-    use windows_sys::Win32::Security::{
-        GetLengthSid, GetTokenInformation, TOKEN_USER, TokenImpersonationLevel, TokenUser,
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenImpersonationLevel};
+    let sid = user(token)?;
+    let mut level = 0i32;
+    let mut written = 0u32;
+    // SAFETY: `level` is the SECURITY_IMPERSONATION_LEVEL Windows writes.
+    let read = unsafe {
+        GetTokenInformation(
+            token,
+            TokenImpersonationLevel,
+            (&raw mut level).cast(),
+            4,
+            &raw mut written,
+        )
     };
+    if read == 0 {
+        return Err(unknown("the caller's token names no level"));
+    }
+    Ok((sid, level))
+}
+
+/// The security identifier of the user `token` names.
+fn user(token: HANDLE) -> Result<Vec<u32>, String> {
+    use windows_sys::Win32::Security::{GetLengthSid, GetTokenInformation, TOKEN_USER, TokenUser};
     let mut size = 0u32;
     // SAFETY: a null buffer of size 0 asks only for the size.
     unsafe { GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &raw mut size) };
@@ -57,22 +98,7 @@ fn user_and_level(token: HANDLE) -> Result<(Vec<u32>, i32), String> {
         std::ptr::copy_nonoverlapping(sid.cast::<u8>(), words.as_mut_ptr().cast::<u8>(), length);
         words
     };
-    let mut level = 0i32;
-    let mut written = 0u32;
-    // SAFETY: `level` is the SECURITY_IMPERSONATION_LEVEL Windows writes.
-    let read = unsafe {
-        GetTokenInformation(
-            token,
-            TokenImpersonationLevel,
-            (&raw mut level).cast(),
-            4,
-            &raw mut written,
-        )
-    };
-    if read == 0 {
-        return Err(unknown("the caller's token names no level"));
-    }
-    Ok((sid, level))
+    Ok(sid)
 }
 
 /// The level a client lends its token at to be identified and nothing
