@@ -40,7 +40,7 @@ pub use account::IDENTIFICATION;
 /// Who may open a pipe always, as Windows writes a security descriptor:
 /// the account that made it, the system and the machine's administrators,
 /// each fully. No ACE for anyone else is a refusal of everyone else.
-const OPENERS: &str = "D:P(A;;GA;;;OW)(A;;GA;;;SY)(A;;GA;;;BA)"; // spellchecker:disable-line
+const OPENERS: &str = "D:P(A;;GA;;;OW)(A;;GA;;;SY)(A;;GA;;;BA)";
 
 /// What an admitted account or group may do to a pipe: read it, its
 /// attributes and its descriptor, write its data and wait on it
