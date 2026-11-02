@@ -81,11 +81,11 @@ mod tests {
             };
             let waited = began.elapsed();
             assert_eq!(error.kind(), std::io::ErrorKind::TimedOut, "{error}");
+            // How soon after is the timing program's (tests/measured).
             assert!(
                 waited >= Duration::from_millis(45),
                 "gave up after {waited:?}"
             );
-            assert!(waited < Duration::from_millis(500), "waited {waited:?}");
         }
         // The pipe still listens after its waits ran out.
         let path = listener.path().to_path_buf();
