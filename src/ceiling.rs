@@ -6,7 +6,7 @@
 //! [`crate::MAX_BODY`] where the protocol states none — and so is the
 //! phrase that says what carries it. The refusal is one sentence
 //! everywhere: every technology's send, encoder and loopback, the
-//! Playground, the HTTP body and [`crate::read`] word it here.
+//! Essentials, the HTTP body and [`crate::read`] word it here.
 
 use crate::NetError;
 
