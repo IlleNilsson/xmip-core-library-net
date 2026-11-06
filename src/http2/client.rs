@@ -58,10 +58,13 @@ impl<S: Read + Write> Client<S> {
         self.connection.open(id);
         let fields = request_fields(&self.scheme, request);
         let bodiless = request.body.is_empty();
-        self.connection.send_headers(id, &fields, bodiless)?;
-        if !bodiless {
-            self.connection.send_data(id, &request.body, true)?;
-        }
+        self.connection.together(|connection| {
+            connection.send_headers(id, &fields, bodiless)?;
+            if !bodiless {
+                connection.send_data(id, &request.body, true)?;
+            }
+            Ok(())
+        })?;
         while self
             .connection
             .streams

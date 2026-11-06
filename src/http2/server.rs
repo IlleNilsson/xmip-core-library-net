@@ -132,22 +132,16 @@ impl<S: Read + Write> Server<S> {
         let head = response_fields(response);
         let trailers = carried(&response.trailers);
         let bodiless = response.body.is_empty();
-        let answered = self
-            .connection
-            .send_headers(stream, &head, bodiless && trailers.is_empty())
-            .and_then(|()| {
-                if bodiless {
-                    return Ok(());
-                }
-                self.connection
-                    .send_data(stream, &response.body, trailers.is_empty())
-            })
-            .and_then(|()| {
-                if trailers.is_empty() {
-                    return Ok(());
-                }
-                self.connection.send_headers(stream, &trailers, true)
-            });
+        let answered = self.connection.together(|connection| {
+            connection.send_headers(stream, &head, bodiless && trailers.is_empty())?;
+            if !bodiless {
+                connection.send_data(stream, &response.body, trailers.is_empty())?;
+            }
+            if !trailers.is_empty() {
+                connection.send_headers(stream, &trailers, true)?;
+            }
+            Ok(())
+        });
         self.connection.streams.remove(&stream);
         answered
     }
