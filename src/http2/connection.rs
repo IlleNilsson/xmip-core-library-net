@@ -58,6 +58,8 @@ pub(super) struct Connection<S> {
     pub(super) pongs: Vec<[u8; 8]>,
     /// How often a send waited for a window to open.
     pub(super) stalls: usize,
+    /// The frames emitted inside [`Connection::together`], written as one.
+    pub(super) held: Option<Vec<u8>>,
 }
 
 impl<S: Read + Write> Connection<S> {
@@ -88,6 +90,7 @@ impl<S: Read + Write> Connection<S> {
             settings_seen: false,
             pongs: Vec::new(),
             stalls: 0,
+            held: None,
         };
         if client {
             connection
@@ -111,16 +114,57 @@ impl<S: Read + Write> Connection<S> {
         })
     }
 
-    /// Write `frame` and flush it.
+    /// Write `frame` and flush it; inside [`Connection::together`], hold it
+    /// to be written with the others.
     ///
     /// # Errors
     ///
     /// Where the connection broke.
     pub(super) fn emit(&mut self, frame: &Frame) -> Result<(), NetError> {
+        if let Some(held) = self.held.as_mut() {
+            held.extend_from_slice(&frame.encode());
+            return Ok(());
+        }
         frame::write(&mut self.io, frame)?;
         self.io
             .flush()
             .map_err(|failed| NetError::from_io("flushing a frame", &failed))
+    }
+
+    /// What `build` emits written as one write, flushed once: a message's
+    /// header block, body and trailers, which the peer reads together, go
+    /// out as one record and one call to the system rather than one each.
+    ///
+    /// # Errors
+    ///
+    /// `build`'s own, or where the connection broke.
+    pub(super) fn together<T>(
+        &mut self,
+        build: impl FnOnce(&mut Self) -> Result<T, NetError>,
+    ) -> Result<T, NetError> {
+        self.held = Some(Vec::new());
+        let made = build(self);
+        let written = self.release();
+        self.held = None;
+        let made = made?;
+        written.map(|()| made)
+    }
+
+    /// What is held written now, holding on: before a wait on the peer,
+    /// which may wait for exactly what is held.
+    ///
+    /// # Errors
+    ///
+    /// Where the connection broke.
+    pub(super) fn release(&mut self) -> Result<(), NetError> {
+        let Some(held) = self.held.as_mut().filter(|held| !held.is_empty()) else {
+            return Ok(());
+        };
+        let bytes = std::mem::take(held);
+        self.io
+            .write_all(&bytes)
+            .and_then(|()| self.io.flush())
+            .map_err(|failed| NetError::from_io("writing frames", &failed))
     }
 
     /// Write `fields` as one header block on `id`, over as many frames as
@@ -179,6 +223,7 @@ impl<S: Read + Write> Connection<S> {
             let most = (self.remote.max_frame_size as usize).min(open);
             if most == 0 && !rest.is_empty() {
                 self.stalls += 1;
+                self.release()?;
                 if !self.pump()? {
                     return Err(NetError::new(
                         "the connection closed while a window was shut",
