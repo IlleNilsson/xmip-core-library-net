@@ -19,9 +19,7 @@ pub fn parse(text: &str) -> Result<IpAddr, NetError> {
     if let Ok(socket) = text.parse::<SocketAddr>() {
         return Ok(socket.ip());
     }
-    if let Some(inner) = text
-        .strip_prefix('[')
-        .and_then(|rest| rest.strip_suffix(']'))
+    if let Some(inner) = text.strip_circumfix('[', ']')
         && let Ok(address) = inner.parse::<IpAddr>()
     {
         return Ok(address);

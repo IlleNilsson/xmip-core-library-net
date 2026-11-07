@@ -14,7 +14,7 @@
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::time::Duration;
 
-use widestring::U16CStr;
+use codec::wide::Wide;
 
 use super::io::{Event, code_of, handle_of, waited};
 
@@ -33,7 +33,7 @@ impl Descriptor {
     /// # Errors
     ///
     /// Where Windows does not read it.
-    pub(crate) fn from_sddl(sddl: &U16CStr) -> std::io::Result<Self> {
+    pub(crate) fn from_sddl(sddl: &Wide) -> std::io::Result<Self> {
         use windows_sys::Win32::Security::Authorization::{
             ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
         };
@@ -71,7 +71,7 @@ impl Drop for Descriptor {
 ///
 /// Where Windows refuses the instance.
 pub(crate) fn instance(
-    path: &U16CStr,
+    path: &Wide,
     descriptor: &Descriptor,
     first: bool,
     buffer: u32,

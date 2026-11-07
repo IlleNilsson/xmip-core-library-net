@@ -5,7 +5,7 @@
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::time::Duration;
 
-use widestring::U16CStr;
+use codec::wide::Wide;
 
 /// Open the named pipe at `path` as a client the server may identify and
 /// never act as: `SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION`, so the
@@ -13,13 +13,13 @@ use widestring::U16CStr;
 /// caller's account and cannot impersonate it beyond reading who it is.
 /// Read and write the data only: a client asks for no right to make an
 /// instance of the pipe. `None` where every instance is busy.
-pub(crate) fn open_identifying(path: &U16CStr) -> Option<std::io::Result<OwnedHandle>> {
+pub(crate) fn open_identifying(path: &Wide) -> Option<std::io::Result<OwnedHandle>> {
     use windows_sys::Win32::Foundation::{ERROR_PIPE_BUSY, GENERIC_READ, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_DATA,
         OPEN_EXISTING, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
     };
-    // SAFETY: `path` ends in NUL, as a `U16CStr` does; every other
+    // SAFETY: `path` ends in NUL, as a `Wide` does; every other
     // argument is a constant or null.
     let handle = unsafe {
         CreateFileW(
@@ -43,13 +43,13 @@ pub(crate) fn open_identifying(path: &U16CStr) -> Option<std::io::Result<OwnedHa
 
 /// Wait for an instance of the pipe at `path` to be free, at most
 /// `within`, or for as long as it takes; whether one is.
-pub(crate) fn wait_free(path: &U16CStr, within: Option<Duration>) -> bool {
+pub(crate) fn wait_free(path: &Wide, within: Option<Duration>) -> bool {
     use windows_sys::Win32::System::Pipes::{NMPWAIT_WAIT_FOREVER, WaitNamedPipeW};
     let milliseconds = within.map_or(NMPWAIT_WAIT_FOREVER, |within| {
         u32::try_from(within.as_millis())
             .unwrap_or(u32::MAX)
             .clamp(1, NMPWAIT_WAIT_FOREVER - 1)
     });
-    // SAFETY: `path` ends in NUL, as a `U16CStr` does.
+    // SAFETY: `path` ends in NUL, as a `Wide` does.
     unsafe { WaitNamedPipeW(path.as_ptr(), milliseconds) != 0 }
 }

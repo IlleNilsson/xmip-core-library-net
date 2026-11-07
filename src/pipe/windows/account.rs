@@ -161,7 +161,7 @@ pub(crate) fn account_name(sid: &[u32]) -> Result<String, String> {
 pub(crate) fn account_sid(name: &str) -> Result<String, String> {
     use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
     use windows_sys::Win32::Security::LookupAccountNameW;
-    let wide = widestring::U16CString::from_str(name).map_err(|error| error.to_string())?;
+    let wide = codec::wide::encode(name).map_err(|error| error.to_string())?;
     let (mut sid_size, mut domain_size, mut kind) = (0u32, 0u32, 0i32);
     // SAFETY: `wide` ends in NUL; null buffers of size 0 ask only for sizes.
     unsafe {
@@ -201,8 +201,15 @@ pub(crate) fn account_sid(name: &str) -> Result<String, String> {
     if unsafe { ConvertSidToStringSidW(sid.as_mut_ptr().cast(), &raw mut text) } == 0 {
         return Err(unknown("the identifier has no text"));
     }
-    // SAFETY: Windows wrote a NUL-terminated string at `text`.
-    let written = unsafe { widestring::U16CStr::from_ptr_str(text) }.to_string_lossy();
+    // SAFETY: Windows wrote a NUL-terminated string at `text`, alive until
+    // it is freed below; it is read up to its NUL and no further.
+    let written = unsafe {
+        let mut length = 0;
+        while *text.add(length) != 0 {
+            length += 1;
+        }
+        codec::wide::decode_lossy(std::slice::from_raw_parts(text, length))
+    };
     // SAFETY: allocated by ConvertSidToStringSidW, freed once.
     unsafe { LocalFree(text.cast()) };
     Ok(written)

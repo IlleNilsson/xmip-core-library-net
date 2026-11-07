@@ -13,8 +13,10 @@ description = "Network primitives the capabilities share, one copy of each: an a
 path = "src/lib.rs"
 
 [dependencies]
-# Hex, which a MAC address and a percent escape are both spelled in.
-codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
+# Hex, which a MAC address and a percent escape are both spelled in; and
+# the wide string the named pipe's paths, descriptor and names cross to
+# Windows as (`codec::wide`).
+codec ={ package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
 
 # The named pipe (`pipe`; ADR-0014, amendment 2026-10-21): on Windows made,
 # connected, read and written through the system's own calls, its security
@@ -23,7 +25,6 @@ codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNil
 # admitted (`pipe/windows/`). The named pipe transport and the runtime's
 # local endpoint both make theirs here.
 [target.'cfg(windows)'.dependencies]
-widestring = "1"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Pipes", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
 
 # On Unix the transport's pipe is a FIFO, which the standard library does
