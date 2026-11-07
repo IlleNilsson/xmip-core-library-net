@@ -33,7 +33,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-use widestring::U16CString;
+use std::os::windows::ffi::OsStrExt;
+
+use codec::wide::Wide;
 
 pub use account::IDENTIFICATION;
 
@@ -100,7 +102,7 @@ pub fn running_as() -> Result<String, String> {
 /// next, and how to make the one after.
 pub struct Listener {
     path: PathBuf,
-    wide: U16CString,
+    wide: Wide,
     descriptor: instance::Descriptor,
     next: Mutex<(OwnedHandle, io::Event)>,
 }
@@ -115,9 +117,9 @@ impl Listener {
     /// already made, or an admitted name Windows does not know.
     pub fn bind(path: &Path, admit: &[String]) -> std::io::Result<Self> {
         let refused = |why: String| std::io::Error::new(std::io::ErrorKind::NotFound, why);
-        let sddl = U16CString::from_str(openers(admit).map_err(refused)?)
+        let sddl = codec::wide::encode(&openers(admit).map_err(refused)?)
             .map_err(std::io::Error::other)?;
-        let wide = U16CString::from_os_str(path.as_os_str()).map_err(std::io::Error::other)?;
+        let wide = wide_path(path)?;
         let descriptor = instance::Descriptor::from_sddl(&sddl)?;
         let first = instance::instance(&wide, &descriptor, true, BUFFER)?;
         Ok(Self {
@@ -311,7 +313,7 @@ impl Cancel {
 ///
 /// No pipe there, or none free within `patience`.
 pub fn connect(path: &Path, patience: Option<Duration>) -> std::io::Result<Stream> {
-    let wide = U16CString::from_os_str(path.as_os_str()).map_err(std::io::Error::other)?;
+    let wide = wide_path(path)?;
     let until = patience.map(|patience| Instant::now() + patience);
     loop {
         if let Some(opened) = client::open_identifying(&wide) {
@@ -325,4 +327,13 @@ pub fn connect(path: &Path, patience: Option<Duration>) -> std::io::Result<Strea
             ));
         }
     }
+}
+
+/// `path` as the pipe calls take it, ended by its NUL.
+///
+/// # Errors
+///
+/// A NUL inside the path, where Windows would read it cut short.
+fn wide_path(path: &Path) -> std::io::Result<Wide> {
+    codec::wide::terminated(path.as_os_str().encode_wide()).map_err(std::io::Error::other)
 }
