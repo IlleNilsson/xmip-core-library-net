@@ -2,7 +2,7 @@
 //! a string packed most significant bit first and padded with the high bits
 //! of `EOS`, and unpacked by walking the code's tree.
 
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 use super::code::{CODES, EOS};
 use crate::http2::error::Violation;
@@ -88,8 +88,7 @@ enum Branch {
 /// The code as a binary tree, built once: each node's branch for a 0 and
 /// for a 1.
 fn tree() -> &'static [[Branch; 2]] {
-    static TREE: OnceLock<Vec<[Branch; 2]>> = OnceLock::new();
-    TREE.get_or_init(|| {
+    static TREE: LazyLock<Vec<[Branch; 2]>> = LazyLock::new(|| {
         let mut nodes = vec![[Branch::None; 2]];
         for (symbol, &(code, bits)) in CODES.iter().enumerate() {
             let mut node = 0;
@@ -109,7 +108,8 @@ fn tree() -> &'static [[Branch; 2]] {
             }
         }
         nodes
-    })
+    });
+    &TREE
 }
 
 fn low_octet(bits: u64) -> u8 {
