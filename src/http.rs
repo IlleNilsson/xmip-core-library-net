@@ -447,7 +447,7 @@ mod tests {
         let mut written = Vec::new();
         write_request(&mut written, &kept).expect("written");
         write_request(&mut written, &Request::new("GET", "/orders/1")).expect("written");
-        let text = String::from_utf8_lossy(&written).into_owned();
+        let text = String::from_utf8_lossy(&written);
         assert_eq!(text.matches("Connection:").count(), 2, "{text}");
         assert!(text.contains("Connection: keep-alive\r\n"), "{text}");
         let mut reader = &written[..];
@@ -509,7 +509,7 @@ mod tests {
             let sent = Response::new(200).body(body).trailer("grpc-status", "0");
             let mut written = Vec::new();
             write_response(&mut written, &sent).expect("written");
-            let text = String::from_utf8_lossy(&written).into_owned();
+            let text = String::from_utf8_lossy(&written);
             assert!(text.contains("Transfer-Encoding: chunked\r\n"), "{text}");
             assert!(!text.contains("Content-Length"), "{text}");
             let back = answer(&written).expect("read");

@@ -15,15 +15,17 @@
 
 use std::path::PathBuf;
 
-#[cfg(unix)]
-mod unix;
-#[cfg(windows)]
-mod windows;
-
-#[cfg(unix)]
-pub use unix::{Listener, Stream, connect};
-#[cfg(windows)]
-pub use windows::{Cancel, IDENTIFICATION, Listener, Stream, connect, openers, running_as};
+cfg_select! {
+    unix => {
+        mod unix;
+        pub use unix::{Listener, Stream, connect};
+    }
+    windows => {
+        mod windows;
+        pub use windows::{Cancel, IDENTIFICATION, Listener, Stream, connect, openers, running_as};
+    }
+    _ => {}
+}
 
 /// The operating system's path for an endpoint called `name`: as given
 /// where it already is a path, `\\.\pipe\<name>` on Windows otherwise, and

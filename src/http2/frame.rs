@@ -271,6 +271,7 @@ pub enum ReadFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn the_header_is_length_type_flags_and_a_31_bit_stream() {
@@ -290,10 +291,7 @@ mod tests {
             .expect("one");
         assert_eq!((back.kind, back.stream), (Kind::Settings, 0));
         assert!(read(&mut &b""[..], 16_384).expect("clean").is_none());
-        assert!(matches!(
-            read(&mut &wire[..4], 16_384),
-            Err(ReadFailure::Net(_))
-        ));
+        assert_matches!(read(&mut &wire[..4], 16_384), Err(ReadFailure::Net(_)));
     }
 
     #[test]
