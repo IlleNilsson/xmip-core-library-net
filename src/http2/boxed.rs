@@ -10,7 +10,7 @@
 
 use std::io::{Read, Write};
 
-use super::{Client, Server};
+use super::{Client, Limits, Server};
 use crate::NetError;
 use crate::http::{Request, Response};
 
@@ -33,6 +33,15 @@ impl<'a> BoxedClient<'a> {
     /// Where the connection broke.
     pub fn handshake(io: Boxed<'a>, scheme: &str) -> Result<Self, NetError> {
         Client::handshake(io, scheme).map(Self)
+    }
+
+    /// As [`Client::handshake_within`].
+    ///
+    /// # Errors
+    ///
+    /// Where the connection broke.
+    pub fn handshake_within(io: Boxed<'a>, scheme: &str, limits: Limits) -> Result<Self, NetError> {
+        Client::handshake_within(io, scheme, limits).map(Self)
     }
 
     /// As [`Client::send`].
@@ -61,6 +70,15 @@ impl<'a> BoxedServer<'a> {
     /// Where the connection broke or did not begin with the preface.
     pub fn handshake(io: Boxed<'a>) -> Result<Self, NetError> {
         Server::handshake(io).map(Self)
+    }
+
+    /// As [`Server::handshake_within`].
+    ///
+    /// # Errors
+    ///
+    /// Where the connection broke or did not begin with the preface.
+    pub fn handshake_within(io: Boxed<'a>, limits: Limits) -> Result<Self, NetError> {
+        Server::handshake_within(io, limits).map(Self)
     }
 
     /// As [`Server::next_request`].

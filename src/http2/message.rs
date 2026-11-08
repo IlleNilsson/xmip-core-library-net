@@ -18,26 +18,15 @@ const CONNECTION_SPECIFIC: [&str; 6] = [
     "host",
 ];
 
-/// What a field costs against `SETTINGS_MAX_HEADER_LIST_SIZE`.
-const OVERHEAD: usize = 32;
-
-/// Refuse a header list that is malformed (section 8.2): larger than
-/// `limit`, a name empty or not lowercase, or a pseudo-field after a
-/// regular one.
+/// Refuse a header list that is malformed (section 8.2): a name empty or
+/// not lowercase, or a pseudo-field after a regular one. Its size the
+/// decoder held to `SETTINGS_MAX_HEADER_LIST_SIZE` as it read it
+/// ([`Decoded`](super::hpack::Decoded)).
 ///
 /// # Errors
 ///
 /// A `PROTOCOL_ERROR` for the stream it arrived on.
-pub fn check(fields: &[(String, String)], limit: usize) -> Result<(), Violation> {
-    let size: usize = fields
-        .iter()
-        .map(|(name, value)| name.len() + value.len() + OVERHEAD)
-        .sum();
-    if size > limit {
-        return Err(Violation::protocol(format!(
-            "a header list of {size} octets, over the {limit} announced"
-        )));
-    }
+pub fn check(fields: &[(String, String)]) -> Result<(), Violation> {
     let mut regular = false;
     for (name, _) in fields {
         if name.is_empty() || name.bytes().any(|b| b.is_ascii_uppercase()) {
@@ -202,7 +191,7 @@ mod tests {
                 ("te", "trailers"),
             ])
         );
-        check(&head, 4096).expect("well formed");
+        check(&head).expect("well formed");
         let back = request_of(head, Vec::new()).expect("read");
         assert_eq!(back.path, "/orders.OrderService/Get");
         assert_eq!(back.query_value("a"), Some("b c"));
@@ -211,9 +200,8 @@ mod tests {
 
     #[test]
     fn a_malformed_head_is_refused() {
-        assert!(check(&fields(&[("Upper", "x")]), 4096).is_err());
-        assert!(check(&fields(&[("a", "1"), (":path", "/")]), 4096).is_err());
-        assert!(check(&fields(&[("a", "1")]), 10).is_err());
+        assert!(check(&fields(&[("Upper", "x")])).is_err());
+        assert!(check(&fields(&[("a", "1"), (":path", "/")])).is_err());
         assert!(request_of(fields(&[(":method", "GET")]), Vec::new()).is_err());
         let head = fields(&[
             (":method", "GET"),

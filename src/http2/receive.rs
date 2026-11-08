@@ -4,10 +4,13 @@
 //! 5.4).
 
 use std::io::{Read, Write};
+use std::time::Instant;
 
 use super::connection::{Connection, Continuing};
 use super::error::{ErrorCode, Violation};
 use super::frame::{self, ACK, END_HEADERS, END_STREAM, Frame, Kind, MAX_STREAM_ID, ReadFailure};
+use super::hpack::Decoded;
+use super::limits::Count;
 use super::message::check;
 use super::stream::State;
 use crate::MAX_BODY;
@@ -74,6 +77,9 @@ impl<S: Read + Write> Connection<S> {
             let kind = frame.kind;
             return Err(Violation::protocol(format!("{kind:?} on stream {}", frame.stream)).into());
         }
+        if let Some(what) = counted(frame) {
+            self.tally.count(what, Instant::now(), &self.limits)?;
+        }
         match frame.kind {
             Kind::Data => self.data(frame),
             Kind::Headers => {
@@ -106,16 +112,26 @@ impl<S: Read + Write> Connection<S> {
         id > self.highest
     }
 
+    /// A `DATA`, taken from the connection's window: what its stream holds
+    /// is given back as the application takes it, and the rest at once.
     fn data(&mut self, frame: &Frame) -> Result<(), Breach> {
-        let id = frame.stream;
         let length = frame.payload.len();
         self.receive.take(length)?;
-        if length > 0 {
-            let increment = u32::try_from(length).unwrap_or(MAX_STREAM_ID);
-            self.emit(&Frame::window_update(0, increment))
-                .map_err(lost)?;
-            self.receive.grant(increment)?;
+        match self.keep(frame) {
+            Ok(held) => self.taken(length - held).map_err(lost),
+            Err(Breach::Stream(id, violation)) => {
+                self.taken(length).map_err(lost)?;
+                Err(Breach::Stream(id, violation))
+            }
+            Err(connection) => Err(connection),
         }
+    }
+
+    /// The content of a `DATA` added to its stream's body: the octets now
+    /// held, none where the stream was reset already.
+    fn keep(&mut self, frame: &Frame) -> Result<usize, Breach> {
+        let id = frame.stream;
+        let length = frame.payload.len();
         if self.idle(id) {
             return Err(Violation::protocol(format!("DATA on idle stream {id}")).into());
         }
@@ -124,7 +140,7 @@ impl<S: Read + Write> Connection<S> {
         };
         if stream.reset.is_some() {
             // Reset already: what was in flight when it was is let go.
-            return Ok(());
+            return Ok(0);
         }
         if !stream.state.receiving() {
             return Err(Breach::Stream(id, closed("DATA")));
@@ -139,15 +155,13 @@ impl<S: Read + Write> Connection<S> {
             return Err(Breach::Stream(id, over));
         }
         stream.body.extend_from_slice(content);
+        let held = content.len();
         if frame.has(END_STREAM) {
             stream.state = stream.state.ended_remotely();
-        } else if length > 0 {
-            let increment = u32::try_from(length).unwrap_or(MAX_STREAM_ID);
-            stream.receive.grant(increment)?;
-            self.emit(&Frame::window_update(id, increment))
-                .map_err(lost)?;
+        } else {
+            self.refill(id).map_err(lost)?;
         }
-        Ok(())
+        Ok(held)
     }
 
     fn block(&mut self, id: u32, block: Vec<u8>, end: bool, whole: bool) -> Result<(), Breach> {
@@ -165,13 +179,23 @@ impl<S: Read + Write> Connection<S> {
             return Ok(());
         }
         // Decoded whatever becomes of the stream: the table is the
-        // connection's, and the peer's encoder has moved on.
-        let fields = self.decoder.decode(&block)?;
-        let limit = self
+        // connection's, and the peer's encoder has moved on. Its size is
+        // held to what this side announced as it is decoded, so a block
+        // that references one entry over and over holds nothing.
+        let most = self
             .local
             .max_header_list_size
             .map_or(usize::MAX, |size| size as usize);
-        check(&fields, limit).map_err(|v| Breach::Stream(id, v))?;
+        let fields = match self.decoder.decode(&block, most)? {
+            Decoded::Fields(fields) => fields,
+            Decoded::Over(size) => {
+                let over = format!("a header list of {size} octets, over the {most} announced");
+                return Err(self.refuse_block(id, Violation::protocol(over)));
+            }
+        };
+        if let Err(malformed) = check(&fields) {
+            return Err(self.refuse_block(id, malformed));
+        }
         if let Some(stream) = self.streams.get_mut(&id) {
             if stream.reset.is_some() {
                 return Ok(());
@@ -205,6 +229,20 @@ impl<S: Read + Write> Connection<S> {
         self.open(id)
             .headers(fields, end)
             .map_err(|v| Breach::Stream(id, v))
+    }
+
+    /// Refuse the header block on `id` for `violation`. A stream the peer
+    /// opens with it is counted as opened, so what follows on it is let go
+    /// as on any stream reset, not taken for a frame on an idle stream.
+    fn refuse_block(&mut self, id: u32, violation: Violation) -> Breach {
+        if !self.streams.contains_key(&id) {
+            if self.client || id.is_multiple_of(2) || id <= self.last_peer {
+                return Violation::protocol(format!("a header block on stream {id}")).into();
+            }
+            self.last_peer = id;
+            self.highest = self.highest.max(id);
+        }
+        Breach::Stream(id, violation)
     }
 
     fn continuation(&mut self, frame: &Frame) -> Result<(), Breach> {
@@ -260,7 +298,11 @@ impl<S: Read + Write> Connection<S> {
             .try_into()
             .map_err(|_| Violation::frame_size("a PING that is not 8 octets"))?;
         if frame.has(ACK) {
-            self.pongs.push(opaque);
+            // Only the answer to a PING this side sent is waited for; an
+            // acknowledgement of anything else is let go.
+            if let Some(at) = self.outstanding.iter().position(|sent| *sent == opaque) {
+                self.outstanding.swap_remove(at);
+            }
             return Ok(());
         }
         self.emit(&Frame::ping(opaque, true)).map_err(lost)
@@ -302,6 +344,19 @@ impl<S: Read + Write> Connection<S> {
                 .map_err(|v| Breach::Stream(id, v)),
             None => Ok(()),
         }
+    }
+}
+
+/// What `frame` counts as against the floods of RFC 9113 section 10.5: a
+/// `PING` or a `SETTINGS`, or a frame that carries nothing and ends
+/// nothing; nothing for every other frame.
+fn counted(frame: &Frame) -> Option<Count> {
+    let empty = frame.payload.is_empty();
+    match frame.kind {
+        Kind::Ping | Kind::Settings => Some(Count::Control),
+        Kind::Data if empty && !frame.has(END_STREAM) => Some(Count::Empty),
+        Kind::Continuation if empty && !frame.has(END_HEADERS) => Some(Count::Empty),
+        _ => None,
     }
 }
 

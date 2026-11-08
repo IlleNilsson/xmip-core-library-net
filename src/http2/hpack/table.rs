@@ -75,6 +75,14 @@ const STATIC: [(&str, &str); 61] = [
 /// What an entry costs beside its name and value (section 4.1).
 const OVERHEAD: usize = 32;
 
+/// What a field costs: its name, its value and 32 octets, the size of an
+/// entry in the table (RFC 7541 section 4.1) and of a field in a header
+/// list against `SETTINGS_MAX_HEADER_LIST_SIZE` (RFC 9113 section 6.5.2).
+#[must_use]
+pub const fn cost(name: &str, value: &str) -> usize {
+    name.len() + value.len() + OVERHEAD
+}
+
 /// Where a field was found: the index of the whole field, or only of its
 /// name.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -168,7 +176,7 @@ impl Table {
     /// larger than the whole table empties it and is not added (section
     /// 4.4).
     pub fn insert(&mut self, name: String, value: String) {
-        let cost = name.len() + value.len() + OVERHEAD;
+        let cost = cost(&name, &value);
         self.evict(self.max_size.saturating_sub(cost));
         if cost <= self.max_size {
             self.size += cost;
@@ -186,7 +194,7 @@ impl Table {
     fn evict(&mut self, room: usize) {
         while self.size > room {
             match self.entries.pop_back() {
-                Some((name, value)) => self.size -= name.len() + value.len() + OVERHEAD,
+                Some((name, value)) => self.size -= cost(&name, &value),
                 None => break,
             }
         }

@@ -13,7 +13,7 @@ pub mod integer;
 pub mod literal;
 pub mod table;
 
-pub use decoder::Decoder;
+pub use decoder::{Decoded, Decoder};
 pub use encoder::Encoder;
 
 #[cfg(test)]
@@ -54,7 +54,10 @@ mod tests {
         let mut encoder = Encoder::new(table_size, huffman);
         for example in examples {
             let block = hex(example.block);
-            let read = decoder.decode(&block).expect(example.section);
+            let read = decoder.decode(&block, usize::MAX).expect(example.section);
+            let Decoded::Fields(read) = read else {
+                panic!("{} over no limit", example.section);
+            };
             assert_eq!(read, list(example.fields), "{}", example.section);
             let written = encoder.encode(example.fields.iter().copied());
             assert_eq!(written, block, "{}", example.section);
@@ -138,7 +141,8 @@ mod tests {
         ];
         for (block, field, size) in independent {
             let mut decoder = Decoder::new(4096);
-            assert_eq!(decoder.decode(&hex(block)).expect(block), list(&[field]));
+            let read = decoder.decode(&hex(block), usize::MAX).expect(block);
+            assert_eq!(read, Decoded::Fields(list(&[field])));
             assert_eq!(decoder.table().size(), size, "{block}");
         }
         let mut encoder = Encoder::new(4096, false);

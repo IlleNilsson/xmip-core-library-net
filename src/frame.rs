@@ -12,7 +12,7 @@
 use std::io::{Read, Write};
 
 use crate::ceiling::within;
-use crate::read::header;
+use crate::read::{exact, header};
 use crate::{MAX_BODY, NetError};
 
 /// What a refusal says carries a frame.
@@ -59,11 +59,9 @@ pub fn read(connection: &mut impl Read) -> Result<Option<Vec<u8>>, NetError> {
     };
     let length = u32::from_be_bytes(length) as usize;
     within(length, MAX_BODY, CARRIER)?;
-    let mut bytes = vec![0u8; length];
-    connection
-        .read_exact(&mut bytes)
-        .map_err(|failed| NetError::from_io("reading a frame", &failed))?;
-    Ok(Some(bytes))
+    // What is held grows as the bytes arrive, not to what the length
+    // claimed before them.
+    exact(connection, length, "a frame").map(Some)
 }
 
 #[cfg(test)]
@@ -99,6 +97,43 @@ mod tests {
         assert!(
             refused.message.contains("Xmip carries in one frame"),
             "{refused:?}"
+        );
+    }
+
+    /// A peer that claims a frame of `claimed` bytes, sends `sent` of them
+    /// and stops; the largest buffer it was handed to fill.
+    struct Claiming {
+        wire: Vec<u8>,
+        at: usize,
+        largest: usize,
+    }
+
+    impl std::io::Read for Claiming {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.largest = self.largest.max(buf.len());
+            let piece = (self.wire.len() - self.at).min(buf.len());
+            buf[..piece].copy_from_slice(&self.wire[self.at..self.at + piece]);
+            self.at += piece;
+            Ok(piece)
+        }
+    }
+
+    #[test]
+    fn a_length_claimed_ahead_of_its_bytes_is_never_held_before_they_arrive() {
+        let claimed = u32::try_from(MAX_BODY).expect("64 MiB");
+        let mut wire = claimed.to_be_bytes().to_vec();
+        wire.extend_from_slice(&[7; 10]);
+        let mut peer = Claiming {
+            wire,
+            at: 0,
+            largest: 0,
+        };
+        let failure = read(&mut peer).expect_err("ended inside the frame");
+        assert_eq!(failure.io, Some(ErrorKind::UnexpectedEof));
+        assert!(
+            peer.largest <= crate::read::CHUNK,
+            "{} bytes held for a frame of 10",
+            peer.largest
         );
     }
 }

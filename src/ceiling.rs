@@ -5,26 +5,22 @@
 //! technology's — one datagram's 65 507 bytes, one SQS message's 256 KiB,
 //! [`crate::MAX_BODY`] where the protocol states none — and so is the
 //! phrase that says what carries it. The refusal is one sentence
-//! everywhere: every technology's send, encoder and loopback, the
-//! Essentials, the HTTP body and [`crate::read`] word it here.
+//! everywhere, `codec::ceiling`'s: every technology's send, encoder and
+//! loopback, the Essentials, the HTTP body and [`crate::read`] take it
+//! here as the network's failure.
 
 use crate::NetError;
 
-/// `Ok` when `size` bytes fit under `ceiling`; otherwise the refusal,
-/// `"<size> bytes is over the <ceiling> <carrier>"`, where `carrier` says
-/// what holds that many: `"one datagram carries"`, `"Xmip reads in one
-/// body"`.
+/// `Ok` when `size` bytes fit under `ceiling`; otherwise the refusal
+/// `codec::ceiling::within` words, `"<size> bytes is over the <ceiling>
+/// <carrier>"`, where `carrier` says what holds that many: `"one datagram
+/// carries"`, `"Xmip reads in one body"`.
 ///
 /// # Errors
 /// Where `size` is over `ceiling`: the peer's or the payload's failure, not
 /// the connection's, so it will say the same thing next time.
 pub fn within(size: usize, ceiling: usize, carrier: &str) -> Result<(), NetError> {
-    if size > ceiling {
-        return Err(NetError::new(format!(
-            "{size} bytes is over the {ceiling} {carrier}"
-        )));
-    }
-    Ok(())
+    codec::ceiling::within(size, ceiling, carrier).map_err(|over| NetError::new(over.message))
 }
 
 #[cfg(test)]

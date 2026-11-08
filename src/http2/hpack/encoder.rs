@@ -73,20 +73,20 @@ impl Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http2::hpack::Decoder;
+    use crate::http2::hpack::{Decoded, Decoder};
 
     #[test]
     fn a_smaller_table_is_announced_once_at_the_start_of_the_next_block() {
         let mut encoder = Encoder::new(4096, false);
         let mut decoder = Decoder::new(4096);
         let first = encoder.encode([("x-a", "1")]);
-        decoder.decode(&first).expect("first");
+        decoder.decode(&first, usize::MAX).expect("first");
         encoder.resize(0);
         let second = encoder.encode([("x-a", "1")]);
         assert_eq!(second[0], 0x20);
         assert_eq!(
-            decoder.decode(&second).expect("second"),
-            [("x-a".into(), "1".into())]
+            decoder.decode(&second, usize::MAX).expect("second"),
+            Decoded::Fields(vec![("x-a".into(), "1".into())])
         );
         assert_eq!(decoder.table().size(), 0);
         assert_ne!(encoder.encode([("x-a", "1")])[0], 0x20);
