@@ -7,10 +7,12 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
+use std::time::Instant;
 
 use super::error::{ErrorCode, Violation};
 use super::frame::{self, END_HEADERS, END_STREAM, Frame, Kind};
 use super::hpack::{Decoder, Encoder};
+use super::limits::{Limits, Tally};
 use super::preface::PREFACE;
 use super::settings::{DEFAULT_WINDOW, Settings};
 use super::stream::{State, Stream};
@@ -41,6 +43,12 @@ pub(super) struct Connection<S> {
     pub(super) send: Window,
     /// What the peer may still send on the connection.
     pub(super) receive: Window,
+    /// What this side holds and answers.
+    pub(super) limits: Limits,
+    /// The frames that carry no work counted in the present span.
+    pub(super) tally: Tally,
+    /// Body octets the application took and the peer is not yet told of.
+    pub(super) credit: u32,
     pub(super) streams: BTreeMap<u32, Stream>,
     pub(super) continuing: Option<Continuing>,
     /// The highest stream either side has opened; above it every stream
@@ -54,8 +62,9 @@ pub(super) struct Connection<S> {
     pub(super) going_away: bool,
     /// Whether the peer's `SETTINGS` has arrived, which must come first.
     pub(super) settings_seen: bool,
-    /// Every `PING` acknowledgement that has arrived.
-    pub(super) pongs: Vec<[u8; 8]>,
+    /// The `PING`s this side sent that are not yet acknowledged; an
+    /// acknowledgement of anything else is let go.
+    pub(super) outstanding: Vec<[u8; 8]>,
     /// How often a send waited for a window to open.
     pub(super) stalls: usize,
     /// The frames emitted inside [`Connection::together`], written as one.
@@ -63,14 +72,15 @@ pub(super) struct Connection<S> {
 }
 
 impl<S: Read + Write> Connection<S> {
-    /// Start a connection over `io`: a client writes the preface, and both
-    /// sides their `SETTINGS`. A server has read the client's preface
-    /// first.
+    /// Start a connection over `io` within `limits`: a client writes the
+    /// preface, and both sides their `SETTINGS` and the connection's
+    /// window opened to what `limits` hold. A server has read the client's
+    /// preface first.
     ///
     /// # Errors
     ///
     /// Where the connection broke.
-    pub(super) fn start(io: S, client: bool) -> Result<Self, NetError> {
+    pub(super) fn start(io: S, client: bool, limits: Limits) -> Result<Self, NetError> {
         let local = Settings::ours();
         let mut connection = Self {
             io,
@@ -81,6 +91,9 @@ impl<S: Read + Write> Connection<S> {
             decoder: Decoder::new(local.header_table_size as usize),
             send: Window::new(DEFAULT_WINDOW),
             receive: Window::new(DEFAULT_WINDOW),
+            limits,
+            tally: Tally::new(Instant::now()),
+            credit: 0,
             streams: BTreeMap::new(),
             continuing: None,
             highest: 0,
@@ -88,7 +101,7 @@ impl<S: Read + Write> Connection<S> {
             goaway: None,
             going_away: false,
             settings_seen: false,
-            pongs: Vec::new(),
+            outstanding: Vec::new(),
             stalls: 0,
             held: None,
         };
@@ -98,8 +111,15 @@ impl<S: Read + Write> Connection<S> {
                 .write_all(PREFACE)
                 .map_err(|failed| NetError::from_io("writing the preface", &failed))?;
         }
-        let settings = Frame::new(Kind::Settings, 0, 0, local.encode());
-        connection.emit(&settings)?;
+        connection.together(|connection| {
+            connection.emit(&Frame::new(Kind::Settings, 0, 0, local.encode()))?;
+            let opened = limits.window() - DEFAULT_WINDOW;
+            if opened > 0 {
+                connection.receive.grant(opened)?;
+                connection.emit(&Frame::window_update(0, opened))?;
+            }
+            Ok(())
+        })?;
         Ok(connection)
     }
 
@@ -308,8 +328,9 @@ impl<S: Read + Write> Connection<S> {
     ///
     /// Where the connection broke or closed first.
     pub(super) fn ping(&mut self, opaque: [u8; 8]) -> Result<(), NetError> {
+        self.outstanding.push(opaque);
         self.emit(&Frame::ping(opaque, false))?;
-        while !self.pongs.contains(&opaque) {
+        while self.outstanding.contains(&opaque) {
             if !self.pump()? {
                 return Err(NetError::new(
                     "the connection closed before the PING came back",

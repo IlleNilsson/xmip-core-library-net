@@ -16,6 +16,14 @@
 //! `GOAWAY` is honored: a stream above the last it names was not
 //! processed, and the request fails as refused rather than lost.
 //!
+//! What a peer can make a connection hold is bounded ([`Limits`]): a
+//! header list by `SETTINGS_MAX_HEADER_LIST_SIZE` as it is decoded, the
+//! bodies of every stream together by the connection's window, which is
+//! given back only as the application takes a body, and the `PING`,
+//! `SETTINGS` and empty frames a span takes before the connection ends
+//! with `ENHANCE_YOUR_CALM`. An acknowledgement of a `PING` this side did
+//! not send is let go.
+//!
 //! Synchronous and hand-written, like every protocol in the estate: one
 //! thread reads and writes, and a request waits for its answer. Server
 //! push is off, which a client announces and a server never tries.
@@ -33,8 +41,12 @@ mod boxed;
 mod client;
 mod connection;
 pub mod error;
+mod flow;
 pub mod frame;
+#[cfg(test)]
+mod hostile;
 pub mod hpack;
+mod limits;
 mod message;
 mod preface;
 mod receive;
@@ -45,6 +57,7 @@ pub mod window;
 
 pub use boxed::{Boxed, BoxedClient, BoxedServer, Duplex};
 pub use client::{Client, exchange};
+pub use limits::Limits;
 pub use preface::{PREFACE, Replayed, sniff};
 pub use server::{Server, serve};
 
@@ -213,11 +226,17 @@ mod tests {
         let kinds: Vec<Kind> = back.iter().map(|frame| frame.kind).collect();
         assert_eq!(
             kinds,
-            [Kind::Settings, Kind::Settings, Kind::Ping, Kind::Goaway]
+            [
+                Kind::Settings,
+                Kind::WindowUpdate,
+                Kind::Settings,
+                Kind::Ping,
+                Kind::Goaway
+            ]
         );
-        assert!(back[1].has(ACK) && back[2].has(ACK));
-        assert_eq!(back[2].payload, b"xmip-h2!");
-        assert_eq!(back[3].word(4), Some(ErrorCode::FrameSize.code()));
+        assert!(back[2].has(ACK) && back[3].has(ACK));
+        assert_eq!(back[3].payload, b"xmip-h2!");
+        assert_eq!(back[4].word(4), Some(ErrorCode::FrameSize.code()));
     }
 
     #[test]

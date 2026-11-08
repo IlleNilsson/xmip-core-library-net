@@ -8,6 +8,7 @@ use std::io::{Read, Write};
 
 use super::connection::Connection;
 use super::error::ErrorCode;
+use super::limits::Limits;
 use super::message::{carried, request_of, response_fields};
 use super::preface::PREFACE;
 use crate::NetError;
@@ -26,13 +27,23 @@ pub struct Server<S: Read + Write> {
 
 impl<S: Read + Write> Server<S> {
     /// Read the client's preface off `io` and answer with this side's
-    /// `SETTINGS`. A connection [`sniff`](super::sniff) looked at is read
-    /// through [`Replayed`](super::Replayed), from its first octet.
+    /// `SETTINGS`, within [`Limits::DEFAULT`]. A connection
+    /// [`sniff`](super::sniff) looked at is read through
+    /// [`Replayed`](super::Replayed), from its first octet.
     ///
     /// # Errors
     ///
     /// Where the connection broke, or did not open with the preface.
-    pub fn handshake(mut io: S) -> Result<Self, NetError> {
+    pub fn handshake(io: S) -> Result<Self, NetError> {
+        Self::handshake_within(io, Limits::DEFAULT)
+    }
+
+    /// As [`Server::handshake`], the connection held to `limits`.
+    ///
+    /// # Errors
+    ///
+    /// Where the connection broke, or did not open with the preface.
+    pub fn handshake_within(mut io: S, limits: Limits) -> Result<Self, NetError> {
         let mut preface = [0u8; PREFACE.len()];
         io.read_exact(&mut preface)
             .map_err(|failed| NetError::from_io("reading the preface", &failed))?;
@@ -42,7 +53,7 @@ impl<S: Read + Write> Server<S> {
             ));
         }
         Ok(Self {
-            connection: Connection::start(io, false)?,
+            connection: Connection::start(io, false, limits)?,
             answering: BTreeSet::new(),
         })
     }
@@ -83,14 +94,19 @@ impl<S: Read + Write> Server<S> {
                 .find(|(id, stream)| stream.finished() && !self.answering.contains(id))
                 .map(|(&id, _)| id);
             if let Some(id) = ready {
-                let taken = self.connection.streams.get_mut(&id).and_then(|stream| {
-                    let body = std::mem::take(&mut stream.body);
-                    stream
-                        .head
-                        .take()
-                        .filter(|_| stream.reset.is_none())
-                        .map(|head| (head, body))
-                });
+                let Some(stream) = self.connection.streams.get_mut(&id) else {
+                    return Ok(None);
+                };
+                let body = std::mem::take(&mut stream.body);
+                let length = body.len();
+                let taken = stream
+                    .head
+                    .take()
+                    .filter(|_| stream.reset.is_none())
+                    .map(|head| (head, body));
+                // Taken, or let go with its stream: the client may send
+                // as much again.
+                self.connection.taken(length)?;
                 match taken.map(|(head, body)| request_of(head, body)) {
                     Some(Ok(request)) => {
                         self.answering.insert(id);

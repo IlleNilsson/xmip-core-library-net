@@ -8,6 +8,7 @@ use std::io::{ErrorKind, Read, Write};
 use super::connection::{Connection, refused};
 use super::error::ErrorCode;
 use super::frame::MAX_STREAM_ID;
+use super::limits::Limits;
 use super::message::{request_fields, response_of};
 use crate::NetError;
 use crate::http::{Request, Response};
@@ -21,14 +22,24 @@ pub struct Client<S: Read + Write> {
 
 impl<S: Read + Write> Client<S> {
     /// Start a connection over `io` for a service at `scheme` — `http` or
-    /// `https`, which each request's `:scheme` names.
+    /// `https`, which each request's `:scheme` names — within
+    /// [`Limits::DEFAULT`].
     ///
     /// # Errors
     ///
     /// Where the connection broke.
     pub fn handshake(io: S, scheme: &str) -> Result<Self, NetError> {
+        Self::handshake_within(io, scheme, Limits::DEFAULT)
+    }
+
+    /// As [`Client::handshake`], the connection held to `limits`.
+    ///
+    /// # Errors
+    ///
+    /// Where the connection broke.
+    pub fn handshake_within(io: S, scheme: &str, limits: Limits) -> Result<Self, NetError> {
         Ok(Self {
-            connection: Connection::start(io, true)?,
+            connection: Connection::start(io, true, limits)?,
             scheme: scheme.to_string(),
             next: 1,
         })
@@ -83,6 +94,9 @@ impl<S: Read + Write> Client<S> {
             .streams
             .remove(&id)
             .ok_or_else(|| NetError::new("the stream was lost"))?;
+        // Taken, or let go with its stream: the server may send as much
+        // again.
+        self.connection.taken(stream.body.len())?;
         if let Some(code) = stream.reset {
             return Err(refused(id, code));
         }

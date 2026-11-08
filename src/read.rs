@@ -8,7 +8,8 @@
 //! reads the line-oriented protocols' lines under [`MAX_LINE`], with one
 //! policy for bytes that are not UTF-8: refused, never repaired, so what a
 //! line says is what the peer sent. [`header`] reads a framed protocol's
-//! fixed header, or nothing where the peer closed between messages.
+//! fixed header, or nothing where the peer closed between messages, and
+//! [`exact`] the length it claimed, held only as it arrives.
 //!
 //! One copy. Until 2026-09-27 the head reader here, STOMP, FTP, IMAP, SMTP,
 //! POP3, NATS, RESP, the SSH identification, syslog, MLLP and the
@@ -100,6 +101,34 @@ pub fn to_end(reader: &mut impl Read, ceiling: usize) -> Result<Vec<u8>, NetErro
         .read_to_end(&mut bytes)
         .map_err(|failed| NetError::from_io("reading a connection to its end", &failed))?;
     within(bytes.len(), ceiling, "Xmip reads to a connection's end")?;
+    Ok(bytes)
+}
+
+/// The most [`exact`] asks a connection for at once.
+pub const CHUNK: usize = 64 * 1024;
+
+/// Exactly `length` bytes, asked for [`CHUNK`] at a time, so what is held
+/// grows with what has arrived and never to a length a peer claimed
+/// before it sent it.
+///
+/// # Errors
+///
+/// Where the connection could not be read, or ended first.
+pub fn exact(reader: &mut impl Read, length: usize, what: &str) -> Result<Vec<u8>, NetError> {
+    let mut bytes = Vec::new();
+    while bytes.len() < length {
+        let filled = bytes.len();
+        bytes.resize(filled + (length - filled).min(CHUNK), 0);
+        match reader.read(&mut bytes[filled..]) {
+            Ok(0) => {
+                let ended = std::io::Error::from(ErrorKind::UnexpectedEof);
+                return Err(NetError::from_io(&format!("reading {what}"), &ended));
+            }
+            Ok(read) => bytes.truncate(filled + read),
+            Err(failed) if failed.kind() == ErrorKind::Interrupted => bytes.truncate(filled),
+            Err(failed) => return Err(NetError::from_io(&format!("reading {what}"), &failed)),
+        }
+    }
     Ok(bytes)
 }
 
