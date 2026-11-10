@@ -3,7 +3,7 @@
 //! (open problem 59).
 //!
 //! Identity presentation is a security responsibility, not a transport's
-//! (`architecture.xmip`), so a server that logs a client in — Xmip's SSH
+//! (`architecture.toml`), so a server that logs a client in — Xmip's SSH
 //! server and FTP server, the loopbacks' and the Essentials' far ends —
 //! links no authenticator: it asks the [`Check`] it was handed. The one
 //! that proves a password is `authenticate/password`'s, the one that says
