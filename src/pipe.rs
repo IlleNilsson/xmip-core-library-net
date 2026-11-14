@@ -5,8 +5,8 @@
 //! read and written (ADR-0014, amendment 2026-10-21).
 //!
 //! On Windows a named pipe is a kernel object under `\\.\pipe\`, made
-//! through the system's own calls in `pipe/windows/`, the one folder of
-//! this crate that crosses a C interface (`test/Unsafe.Test.ps1`). On Unix
+//! through the system's own calls in `system/pipe/`, inside the one folder
+//! of this crate that crosses a C interface (`test/Unsafe.Test.ps1`). On Unix
 //! the transport's pipe is a FIFO, a file, and a bare name is a file in the
 //! temporary directory; a node's local endpoint there is a Unix domain
 //! socket, which the standard library makes. A name that already is a path

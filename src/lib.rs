@@ -5,7 +5,9 @@
 //! a target as a URI writes it — scheme, authority, path, query and
 //! fragment — read once ([`Target`]), a filesystem path as a URI's path
 //! ([`uri`]), a TCP connection to every
-//! address a peer resolves to in turn ([`connect`]), reading off a connection
+//! address a peer resolves to in turn ([`connect`]), a refusal answered at
+//! once and a SYN nobody answered sent again as the node's `[tuning]` says
+//! ([`Retransmission`]), reading off a connection
 //! under a ceiling ([`read`]), a length-prefixed frame as Xmip's node-to-node
 //! protocols write one ([`frame`]) and the one refusal of a size over a ceiling
 //! ([`ceiling`]), a head as the line-oriented protocols write
@@ -58,11 +60,13 @@ mod network;
 pub mod pipe;
 pub mod read;
 pub mod reply;
+#[cfg(windows)]
+mod system;
 mod target;
 pub mod uri;
 pub mod watched;
 
-pub use connect::connect;
+pub use connect::{RETRANSMISSION, Retransmission, connect, retransmission, retransmit_by};
 pub use endpoint::{Endpoint, Schemes};
 pub use network::Network;
 pub use target::{PATH_SCHEME, Target, scheme_of};
