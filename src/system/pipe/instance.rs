@@ -16,7 +16,8 @@ use std::time::Duration;
 
 use codec::wide::Wide;
 
-use super::io::{Event, code_of, handle_of, waited};
+use super::io::handle_of;
+use crate::system::overlapped::{Event, On, code_of, waited};
 
 /// Who may open a pipe, as Windows holds a security descriptor: read once
 /// from SDDL and kept for every instance the pipe makes.
@@ -135,7 +136,7 @@ pub(crate) fn connected(
     use windows_sys::Win32::Foundation::{ERROR_NO_DATA, ERROR_PIPE_CONNECTED};
     use windows_sys::Win32::System::Pipes::ConnectNamedPipe;
     let handle = handle_of(pipe);
-    let waited = waited(pipe, event, within, |overlapped| {
+    let waited = waited(On::File(handle), event, within, |overlapped| {
         // SAFETY: `handle` is open for the call, and `overlapped` outlives
         // the operation, which `waited` ends before it returns.
         unsafe { ConnectNamedPipe(handle, overlapped) }

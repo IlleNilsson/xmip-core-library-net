@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/IlleNilsson/xmip-core-library-net"
-description = "Network primitives the capabilities share, one copy of each: an address, a URI's authority, path and endpoint, a network in prefix notation, a MAC address, a line-oriented head, HTTP/1.1 and HTTP/2 with HPACK, both halves, and the named pipe the named pipe transport and the runtime's local endpoint share."
+description = "Network primitives the capabilities share, one copy of each: an address, a URI's authority, path and endpoint, a network in prefix notation, a MAC address, the one TCP connect, a line-oriented head, HTTP/1.1 and HTTP/2 with HPACK, both halves, and the named pipe the named pipe transport and the runtime's local endpoint share."
 
 [lib]
 path = "src/lib.rs"
@@ -22,10 +22,12 @@ codec ={ package = "xmip-core-library-codec", git = "https://github.com/IlleNils
 # connected, read and written through the system's own calls, its security
 # descriptor written from SDDL, a client opened lent for identification
 # alone, the account it connected as and the identifier of an account
-# admitted (`pipe/windows/`). The named pipe transport and the runtime's
-# local endpoint both make theirs here.
+# admitted (`system/pipe/`). The named pipe transport and the runtime's
+# local endpoint both make theirs here. And the TCP connect's socket, its
+# SYN sent once and its refusal answered at once (`system/connect.rs`;
+# ADR-0044, amendment 2026-11-14).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Pipes", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Networking_WinSock", "Win32_System_IO", "Win32_System_Pipes", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
 
 # On Unix the transport's pipe is a FIFO, which the standard library does
 # not make; `nix` makes it with a safe call.
@@ -47,11 +49,18 @@ name = "measured"
 path = "tests/measured/main.rs"
 test = false
 
+[dev-dependencies]
+# The timing program's figure, the fastest of five over its rounds, read
+# once for the estate (`xcore::latency`). Test-only: what this library is
+# built out of stays Library (`test/Layer.Test.ps1` reads `[dependencies]`).
+xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main", features = ["test-support"] }
+
 [lints.rust]
-# deny, not forbid: the named pipe on Windows crosses a C interface in one
-# folder, `src/pipe/windows/`, each file lowering this at its top
-# (ADR-0050, amendment 2026-10-21; `test/Unsafe.Test.ps1` holds the
-# folder). Every other file of the crate writes no unsafe code.
+# deny, not forbid: the crate's calls to Windows — the named pipe's and the
+# TCP connect's — cross a C interface in one folder, `src/system/`, each
+# file lowering this at its top (ADR-0050, amendments 2026-10-21 and
+# 2026-11-14; `test/Unsafe.Test.ps1` holds the folder). Every other file of
+# the crate writes no unsafe code.
 unsafe_code = "deny"
 
 [lints.clippy]

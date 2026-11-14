@@ -20,11 +20,9 @@
 //!
 //! A pipe has no read timeout: a read waiting on its peer is ended by
 //! [`Cancel`], the pipe's I/O cancelled from another thread.
-
-mod account;
-mod client;
-mod instance;
-mod io;
+//!
+//! The calls into Windows are the crate's one folder of them,
+//! `crate::system::pipe`; this file writes none.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -36,6 +34,9 @@ use std::time::{Duration, Instant};
 use std::os::windows::ffi::OsStrExt;
 
 use codec::wide::Wide;
+
+use crate::system::overlapped::Event;
+use crate::system::pipe::{account, client, instance, io};
 
 pub use account::IDENTIFICATION;
 
@@ -104,7 +105,7 @@ pub struct Listener {
     path: PathBuf,
     wide: Wide,
     descriptor: instance::Descriptor,
-    next: Mutex<(OwnedHandle, io::Event)>,
+    next: Mutex<(OwnedHandle, Event)>,
 }
 
 impl Listener {
@@ -126,7 +127,7 @@ impl Listener {
             path: path.to_path_buf(),
             wide,
             descriptor,
-            next: Mutex::new((first, io::Event::new()?)),
+            next: Mutex::new((first, Event::new()?)),
         })
     }
 
@@ -149,7 +150,7 @@ impl Listener {
         // bounded: by `within`, or as long as the maker waits; a stop wakes it
         instance::connected(&next.0, &next.1, within)?;
         let after = instance::instance(&self.wide, &self.descriptor, false, BUFFER)?;
-        let (reached, event) = std::mem::replace(&mut *next, (after, io::Event::new()?));
+        let (reached, event) = std::mem::replace(&mut *next, (after, Event::new()?));
         Ok(Stream::new(reached, event, true))
     }
 }
@@ -158,7 +159,7 @@ impl Listener {
 pub struct Stream {
     pipe: OwnedHandle,
     /// What its reads and writes wait on.
-    event: io::Event,
+    event: Event,
     open: Arc<Mutex<Option<usize>>>,
     /// Whether this is the made end, which may ask who connected.
     made: bool,
@@ -167,7 +168,7 @@ pub struct Stream {
 }
 
 impl Stream {
-    fn new(pipe: OwnedHandle, event: io::Event, made: bool) -> Self {
+    fn new(pipe: OwnedHandle, event: Event, made: bool) -> Self {
         let handle = pipe.as_raw_handle() as usize;
         Self {
             pipe,
@@ -317,7 +318,7 @@ pub fn connect(path: &Path, patience: Option<Duration>) -> std::io::Result<Strea
     let until = patience.map(|patience| Instant::now() + patience);
     loop {
         if let Some(opened) = client::open_identifying(&wide) {
-            return Ok(Stream::new(opened?, io::Event::new()?, false));
+            return Ok(Stream::new(opened?, Event::new()?, false));
         }
         let left = until.map(|until| until.saturating_duration_since(Instant::now()));
         if left.is_some_and(|left| left.is_zero()) || !client::wait_free(&wide, left) {

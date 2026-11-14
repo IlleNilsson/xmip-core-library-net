@@ -10,19 +10,21 @@
 //! `x-amz-date`, the basic ISO 8601 `20260908T120000Z`, lived here beside
 //! it until 2026-09-24; it is AWS's, and is written by the signer in
 //! `xmip-core-transport-aws` that reads it.
-
-use std::time::SystemTime;
+//!
+//! The moment is a parameter, seconds since the Unix epoch: this reads no
+//! clock (ADR-0068, amendment 2026-11-14).
 
 use codec::civil::CivilTime;
 
-/// `at` as RFC 1123 writes it: `Sun, 06 Nov 1994 08:49:37 GMT`.
+/// The moment `unix_seconds` after the epoch as RFC 1123 writes it:
+/// `Sun, 06 Nov 1994 08:49:37 GMT`.
 #[must_use]
-pub fn rfc1123(at: SystemTime) -> String {
+pub fn rfc1123(unix_seconds: i64) -> String {
     const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
-    let moment = CivilTime::from_system_time(at);
+    let moment = CivilTime::from_unix(unix_seconds);
     let weekday = DAYS[moment.weekday() as usize % 7];
     let month = MONTHS[(moment.month as usize + 11) % 12];
     format!(
@@ -34,13 +36,11 @@ pub fn rfc1123(at: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, UNIX_EPOCH};
 
     #[test]
     fn the_date_is_written_as_rfc_1123_writes_it() {
-        assert_eq!(rfc1123(UNIX_EPOCH), "Thu, 01 Jan 1970 00:00:00 GMT");
-        let at = UNIX_EPOCH + Duration::from_secs(784_111_777);
-        assert_eq!(rfc1123(at), "Sun, 06 Nov 1994 08:49:37 GMT");
-        assert!(rfc1123(SystemTime::now()).ends_with(" GMT"));
+        assert_eq!(rfc1123(0), "Thu, 01 Jan 1970 00:00:00 GMT");
+        assert_eq!(rfc1123(784_111_777), "Sun, 06 Nov 1994 08:49:37 GMT");
+        assert_eq!(rfc1123(1_800_000_000), "Fri, 15 Jan 2027 08:00:00 GMT");
     }
 }
