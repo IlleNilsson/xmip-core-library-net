@@ -23,7 +23,9 @@ use crate::target::Target;
 pub struct Schemes {
     /// The schemes that are `http://` on the wire.
     pub plain: &'static [&'static str],
-    /// The schemes that are `https://` on the wire.
+    /// The schemes that are `https://` on the wire, each in the place of
+    /// its plain twin in [`Self::plain`]: `https` where `http` is, `as4s`
+    /// where `as4` is ([`Self::plain_twin`]).
     pub secure: &'static [&'static str],
 }
 
@@ -33,6 +35,19 @@ impl Schemes {
         plain: &["http"],
         secure: &["https"],
     };
+
+    /// The plain scheme `secure`, in any case, is the twin of — `http` of
+    /// `https`, `as4` of `as4s` — by its place in [`Self::secure`]: what a
+    /// listener refused for asking for TLS tells its operator to enter
+    /// instead. `None` where `secure` is not one of them.
+    #[must_use]
+    pub fn plain_twin(&self, secure: &str) -> Option<&'static str> {
+        let at = self
+            .secure
+            .iter()
+            .position(|scheme| scheme.eq_ignore_ascii_case(secure))?;
+        self.plain.get(at).copied()
+    }
 
     /// The schemes as a refusal names them: `http:// or https://`.
     fn named(&self) -> String {
@@ -291,6 +306,19 @@ mod tests {
             Endpoint::parse("as2://h/x").is_err(),
             "HTTP alone knows no alias"
         );
+    }
+
+    #[test]
+    fn a_secure_scheme_s_plain_twin_is_the_one_in_its_place() {
+        const AS2: Schemes = Schemes {
+            plain: &["http", "as2"],
+            secure: &["https", "as2s"],
+        };
+
+        assert_eq!(AS2.plain_twin("as2s"), Some("as2"));
+        assert_eq!(AS2.plain_twin("HTTPS"), Some("http"));
+        assert_eq!(AS2.plain_twin("as2"), None, "plain already");
+        assert_eq!(Schemes::HTTP.plain_twin("as2s"), None);
     }
 
     #[test]
