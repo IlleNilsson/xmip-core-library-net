@@ -5,6 +5,7 @@
 
 use std::io::{ErrorKind, Read, Write};
 
+use super::Now;
 use super::connection::{Connection, refused};
 use super::error::ErrorCode;
 use super::frame::MAX_STREAM_ID;
@@ -23,13 +24,13 @@ pub struct Client<S: Read + Write> {
 impl<S: Read + Write> Client<S> {
     /// Start a connection over `io` for a service at `scheme` — `http` or
     /// `https`, which each request's `:scheme` names — within
-    /// [`Limits::DEFAULT`].
+    /// [`Limits::DEFAULT`] counted on the clock `now` reads.
     ///
     /// # Errors
     ///
     /// Where the connection broke.
-    pub fn handshake(io: S, scheme: &str) -> Result<Self, NetError> {
-        Self::handshake_within(io, scheme, Limits::DEFAULT)
+    pub fn handshake(io: S, scheme: &str, now: Now) -> Result<Self, NetError> {
+        Self::handshake_within(io, scheme, now, Limits::DEFAULT)
     }
 
     /// As [`Client::handshake`], the connection held to `limits`.
@@ -37,9 +38,14 @@ impl<S: Read + Write> Client<S> {
     /// # Errors
     ///
     /// Where the connection broke.
-    pub fn handshake_within(io: S, scheme: &str, limits: Limits) -> Result<Self, NetError> {
+    pub fn handshake_within(
+        io: S,
+        scheme: &str,
+        now: Now,
+        limits: Limits,
+    ) -> Result<Self, NetError> {
         Ok(Self {
-            connection: Connection::start(io, true, limits)?,
+            connection: Connection::start(io, true, limits, now)?,
             scheme: scheme.to_string(),
             next: 1,
         })
@@ -144,8 +150,8 @@ impl<S: Read + Write> Client<S> {
 }
 
 /// Send `request` over `io` on a connection of its own, for a service at
-/// `scheme`, and read its answer: the HTTP/2 counterpart of
-/// [`crate::http::exchange`].
+/// `scheme`, its spans counted on the clock `now` reads, and read its
+/// answer: the HTTP/2 counterpart of [`crate::http::exchange`].
 ///
 /// # Errors
 ///
@@ -153,9 +159,10 @@ impl<S: Read + Write> Client<S> {
 pub fn exchange<S: Read + Write>(
     io: S,
     scheme: &str,
+    now: Now,
     request: &Request,
 ) -> Result<Response, NetError> {
-    let mut client = Client::handshake(io, scheme)?;
+    let mut client = Client::handshake(io, scheme, now)?;
     let response = client.send(request)?;
     client.close();
     Ok(response)

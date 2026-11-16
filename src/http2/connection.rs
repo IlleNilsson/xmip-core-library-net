@@ -7,8 +7,8 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::time::Instant;
 
+use super::Now;
 use super::error::{ErrorCode, Violation};
 use super::frame::{self, END_HEADERS, END_STREAM, Frame, Kind};
 use super::hpack::{Decoder, Encoder};
@@ -45,6 +45,9 @@ pub(super) struct Connection<S> {
     pub(super) receive: Window,
     /// What this side holds and answers.
     pub(super) limits: Limits,
+    /// The caller's clock, which the span of [`Connection::tally`] is
+    /// counted on.
+    pub(super) now: Now,
     /// The frames that carry no work counted in the present span.
     pub(super) tally: Tally,
     /// Body octets the application took and the peer is not yet told of.
@@ -72,16 +75,17 @@ pub(super) struct Connection<S> {
 }
 
 impl<S: Read + Write> Connection<S> {
-    /// Start a connection over `io` within `limits`: a client writes the
-    /// preface, and both sides their `SETTINGS` and the connection's
-    /// window opened to what `limits` hold. A server has read the client's
-    /// preface first.
+    /// Start a connection over `io` within `limits`, its spans counted on
+    /// the clock `now` reads: a client writes the preface, and both sides
+    /// their `SETTINGS` and the connection's window opened to what `limits`
+    /// hold. A server has read the client's preface first.
     ///
     /// # Errors
     ///
     /// Where the connection broke.
-    pub(super) fn start(io: S, client: bool, limits: Limits) -> Result<Self, NetError> {
+    pub(super) fn start(io: S, client: bool, limits: Limits, now: Now) -> Result<Self, NetError> {
         let local = Settings::ours();
+        let began = now();
         let mut connection = Self {
             io,
             client,
@@ -92,7 +96,8 @@ impl<S: Read + Write> Connection<S> {
             send: Window::new(DEFAULT_WINDOW),
             receive: Window::new(DEFAULT_WINDOW),
             limits,
-            tally: Tally::new(Instant::now()),
+            now,
+            tally: Tally::new(began),
             credit: 0,
             streams: BTreeMap::new(),
             continuing: None,

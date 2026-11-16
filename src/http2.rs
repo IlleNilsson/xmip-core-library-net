@@ -22,7 +22,9 @@
 //! given back only as the application takes a body, and the `PING`,
 //! `SETTINGS` and empty frames a span takes before the connection ends
 //! with `ENHANCE_YOUR_CALM`. An acknowledgement of a `PING` this side did
-//! not send is let go.
+//! not send is let go. The span is counted on the caller's clock, handed
+//! to the handshake as its reading ([`Now`]): a Library reads no clock
+//! (ADR-0068, amendments 2026-11-14 and 2026-11-15).
 //!
 //! Synchronous and hand-written, like every protocol in the estate: one
 //! thread reads and writes, and a request waits for its answer. Server
@@ -61,6 +63,12 @@ pub use limits::Limits;
 pub use preface::{PREFACE, Replayed, sniff};
 pub use server::{Server, serve};
 
+/// What the time is on the caller's clock, in nanoseconds from a moment of
+/// its own and never less than a reading before it: `xcore::Clock::
+/// monotonic_nanos` of the Clock the caller was handed, which a test steps.
+/// A connection counts the frames of a span ([`Limits::span`]) on it.
+pub type Now = Box<dyn Fn() -> i128 + Send + Sync>;
+
 #[cfg(test)]
 mod tests {
     use super::error::ErrorCode;
@@ -73,6 +81,11 @@ mod tests {
     use std::time::Duration;
 
     const WAIT: Option<Duration> = Some(Duration::from_secs(10));
+
+    /// A clock that never moves, for a connection no span of which ends.
+    fn still() -> Now {
+        Box::new(|| 0)
+    }
 
     /// A loopback connection: the far end handed to `far` on its own
     /// thread, the near end returned.
@@ -94,7 +107,7 @@ mod tests {
     #[test]
     fn a_request_and_its_answer_round_trip_on_one_connection() {
         let (near, far) = pair(|socket| {
-            serve(socket, |request| {
+            serve(socket, still(), |request| {
                 let mut body = request.body.clone();
                 body.reverse();
                 Response::new(200)
@@ -104,7 +117,7 @@ mod tests {
             })
             .expect("served")
         });
-        let mut client = Client::handshake(near, "http").expect("handshake");
+        let mut client = Client::handshake(near, "http", still()).expect("handshake");
         let posted = Request::new("POST", "/orders")
             .query("id", "7")
             .header("Host", "example")
@@ -128,7 +141,7 @@ mod tests {
             .collect();
         let sent = big.clone();
         let (near, far) = pair(move |socket| {
-            let mut server = Server::handshake(socket).expect("handshake");
+            let mut server = Server::handshake(socket, still()).expect("handshake");
             let (id, request) = server.next_request().expect("read").expect("one");
             assert_eq!(request.body, sent);
             server
@@ -138,7 +151,7 @@ mod tests {
             server.close();
             stalls
         });
-        let mut client = Client::handshake(near, "http").expect("handshake");
+        let mut client = Client::handshake(near, "http", still()).expect("handshake");
         let answer = client
             .send(&Request::new("PUT", "/big").body(&big))
             .expect("answered");
@@ -154,13 +167,13 @@ mod tests {
     #[test]
     fn a_goaway_lets_the_taken_stream_finish_and_refuses_the_next() {
         let (near, far) = pair(|socket| {
-            let mut server = Server::handshake(socket).expect("handshake");
+            let mut server = Server::handshake(socket, still()).expect("handshake");
             let (id, _) = server.next_request().expect("read").expect("one");
             server.go_away().expect("going away");
             server.respond(id, &Response::new(204)).expect("answered");
             assert!(server.next_request().expect("read").is_none());
         });
-        let mut client = Client::handshake(near, "http").expect("handshake");
+        let mut client = Client::handshake(near, "http", still()).expect("handshake");
         assert_eq!(
             client
                 .send(&Request::new("GET", "/1"))
@@ -185,7 +198,7 @@ mod tests {
             frame::write(&mut socket, &Frame::goaway(0, ErrorCode::NoError, b"bye")).expect("g");
             let _ = socket.read_to_end(&mut Vec::new());
         });
-        let mut client = Client::handshake(near, "https").expect("handshake");
+        let mut client = Client::handshake(near, "https", still()).expect("handshake");
         let refused = client.send(&Request::new("GET", "/")).expect_err("refused");
         assert_eq!(refused.io, Some(ErrorKind::ConnectionAborted), "{refused}");
         drop(client);
@@ -196,7 +209,7 @@ mod tests {
     /// preface and `SETTINGS`: every frame, up to the connection's end.
     fn answered(frames: &[Frame]) -> Vec<Frame> {
         let (mut near, far) = pair(|socket| {
-            let _ = serve(socket, |_| Response::new(200));
+            let _ = serve(socket, still(), |_| Response::new(200));
         });
         near.write_all(PREFACE).expect("preface");
         frame::write(&mut near, &Frame::new(Kind::Settings, 0, 0, Vec::new())).expect("settings");

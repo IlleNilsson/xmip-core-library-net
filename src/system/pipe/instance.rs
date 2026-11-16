@@ -136,7 +136,7 @@ pub(crate) fn connected(
     use windows_sys::Win32::Foundation::{ERROR_NO_DATA, ERROR_PIPE_CONNECTED};
     use windows_sys::Win32::System::Pipes::ConnectNamedPipe;
     let handle = handle_of(pipe);
-    let waited = waited(On::File(handle), event, within, |overlapped| {
+    let waited = waited(On::File(handle), event, within, None, |overlapped| {
         // SAFETY: `handle` is open for the call, and `overlapped` outlives
         // the operation, which `waited` ends before it returns.
         unsafe { ConnectNamedPipe(handle, overlapped) }

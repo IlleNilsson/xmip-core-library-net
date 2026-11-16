@@ -22,7 +22,9 @@
 //! listener's
 //! accept woken by its stop until it has heard ([`accepting`]); and a login
 //! a server is offered, with the check it is handed to admit one
-//! ([`login`]); and, for tests
+//! ([`login`]); on Windows, the one wait for an overlapped operation every
+//! call into Windows here and a serial port's take (`system::overlapped`);
+//! and, for tests
 //! alone, a loopback address no one holds (`fixture`, `test-support`).
 //!
 //! Until 2026-09-22 identification and authorization each carried a network
@@ -61,7 +63,7 @@ pub mod pipe;
 pub mod read;
 pub mod reply;
 #[cfg(windows)]
-mod system;
+pub mod system;
 mod target;
 pub mod uri;
 pub mod watched;
@@ -124,4 +126,14 @@ impl From<codec::CodecError> for NetError {
     fn from(error: codec::CodecError) -> Self {
         Self::new(error.message)
     }
+}
+
+/// Whether `span` has passed from the reading `since` to the reading `now`
+/// of one monotonic clock, in nanoseconds: what a watched connection's
+/// silence and an HTTP/2 connection's span of frames end by. A Library
+/// reads no clock (ADR-0068, amendments 2026-11-14 and 2026-11-15): both
+/// readings are its caller's, `xcore::Clock::monotonic_nanos` of the Clock
+/// the caller was handed.
+pub(crate) fn passed(since: i128, now: i128, span: std::time::Duration) -> bool {
+    u128::try_from(now.saturating_sub(since)).is_ok_and(|apart| apart >= span.as_nanos())
 }

@@ -22,7 +22,7 @@ pub(crate) fn read(pipe: &OwnedHandle, event: &Event, buffer: &mut [u8]) -> std:
     use windows_sys::Win32::Storage::FileSystem::ReadFile;
     let length = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
     let handle = handle_of(pipe);
-    let read = waited(On::File(handle), event, None, |overlapped| {
+    let read = waited(On::File(handle), event, None, None, |overlapped| {
         // SAFETY: `buffer` holds `length` bytes and outlives the operation,
         // which `waited` ends before it returns.
         unsafe {
@@ -50,7 +50,7 @@ pub(crate) fn write(pipe: &OwnedHandle, event: &Event, bytes: &[u8]) -> std::io:
     use windows_sys::Win32::Storage::FileSystem::WriteFile;
     let length = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
     let handle = handle_of(pipe);
-    waited(On::File(handle), event, None, |overlapped| {
+    waited(On::File(handle), event, None, None, |overlapped| {
         // SAFETY: `bytes` holds `length` bytes and outlives the operation,
         // which `waited` ends before it returns.
         unsafe {

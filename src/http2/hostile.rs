@@ -1,18 +1,23 @@
 //! A hostile peer, frame by frame, on a connection in memory: each attack
 //! of RFC 9113 section 10.5 and RFC 7541 section 7.3 written as the frames
 //! that make it, and what the connection holds, answers and refuses
-//! counted from its state and from what it wrote — never from a clock.
+//! counted from its state and from what it wrote, on a clock the test
+//! steps: one that never moves, or `xcore::clock::Stepped` where a span
+//! ends.
 
 use std::cell::RefCell;
 use std::io::{Cursor, Read, Write};
 use std::rc::Rc;
-use std::time::Duration;
+use std::sync::Arc;
+
+use xcore::Clock;
+use xcore::clock::Stepped;
 
 use super::connection::Connection;
 use super::error::ErrorCode;
 use super::frame::{self, ACK, END_HEADERS, END_STREAM, Frame, Kind};
 use super::hpack::{integer, table};
-use super::{Limits, PREFACE, Server};
+use super::{Limits, Now, PREFACE, Server};
 
 /// What the peer sends, read off in order, and what this side wrote.
 struct Scripted {
@@ -53,11 +58,17 @@ fn peer(frames: &[Frame]) -> (Scripted, Rc<RefCell<Vec<u8>>>) {
     (scripted, output)
 }
 
+/// A clock that never moves: no span of a connection on it ends.
+fn still() -> Now {
+    Box::new(|| 0)
+}
+
 /// A server connection that has read every frame `frames` holds, or
-/// ended the connection over one; whether it ended it.
+/// ended the connection over one, on a clock that never moves; whether
+/// it ended it.
 fn served(frames: &[Frame], limits: Limits) -> (Connection<Scripted>, Vec<Frame>, bool) {
     let (scripted, output) = peer(frames);
-    let mut connection = Connection::start(scripted, false, limits).expect("started");
+    let mut connection = Connection::start(scripted, false, limits, still()).expect("started");
     let ended = loop {
         match connection.pump() {
             Ok(true) => {}
@@ -106,10 +117,9 @@ fn head(id: u32, post: bool, flags: u8) -> Frame {
     )
 }
 
-/// Limits whose span no test outlives, so a count is never reset by time.
+/// Limits of `control_frames` and `empty_frames` in a span.
 fn counted(control_frames: u32, empty_frames: u32) -> Limits {
     Limits {
-        span: Duration::from_secs(3600),
         control_frames,
         empty_frames,
         ..Limits::DEFAULT
@@ -216,7 +226,7 @@ fn a_body_taken_gives_its_window_back_so_the_next_one_fits() {
     let mut wire = PREFACE.to_vec();
     wire.extend_from_slice(scripted.input.get_ref());
     scripted.input = Cursor::new(wire);
-    let mut server = Server::handshake_within(scripted, limits).expect("handshake");
+    let mut server = Server::handshake_within(scripted, still(), limits).expect("handshake");
     for id in [1, 3] {
         let (stream, request) = server.next_request().expect("read").expect("a request");
         assert_eq!((stream, request.body.len()), (id, 90_000));
@@ -273,6 +283,49 @@ fn a_flood_of_pings_settings_or_empty_frames_is_told_to_calm_down() {
 }
 
 #[test]
+fn a_span_passed_on_the_connections_clock_counts_its_frames_over() {
+    // Three PING and SETTINGS frames a span: the peer's SETTINGS and two
+    // PINGs fill the first, three PINGs the next, and a fourth in it is one
+    // too many.
+    let limits = counted(3, 0);
+    let pings: Vec<Frame> = (0..6u64)
+        .map(|n| Frame::ping(n.to_be_bytes(), false))
+        .collect();
+    let (scripted, output) = peer(&pings);
+    let clock = Arc::new(Stepped::default());
+    let reading = Arc::clone(&clock);
+    let now: Now = Box::new(move || reading.monotonic_nanos());
+    let mut connection = Connection::start(scripted, false, limits, now).expect("started");
+    for _ in 0..3 {
+        assert!(connection.pump().expect("within the span"));
+    }
+    let short = limits.span.checked_sub(std::time::Duration::from_nanos(1));
+    clock.pass(short.expect("a span of a second"));
+    assert!(connection.pump().is_err(), "a nanosecond short of the span");
+
+    let (scripted, output_next) = peer(&pings);
+    let reading = Arc::clone(&clock);
+    let now: Now = Box::new(move || reading.monotonic_nanos());
+    let mut next = Connection::start(scripted, false, limits, now).expect("started");
+    for _ in 0..3 {
+        assert!(next.pump().expect("within the span"));
+    }
+    clock.pass(limits.span);
+    for _ in 0..3 {
+        assert!(next.pump().expect("a new span"));
+    }
+    assert!(next.pump().is_err(), "a fourth in the new span");
+    assert_eq!(
+        goaway(&written(&output.borrow())),
+        Some(ErrorCode::EnhanceYourCalm.code())
+    );
+    assert_eq!(
+        goaway(&written(&output_next.borrow())),
+        Some(ErrorCode::EnhanceYourCalm.code())
+    );
+}
+
+#[test]
 fn empty_frames_that_end_something_are_not_counted() {
     let mut frames = Vec::new();
     for id in (1..100).step_by(2) {
@@ -286,7 +339,8 @@ fn empty_frames_that_end_something_are_not_counted() {
 #[test]
 fn a_ping_this_side_sent_is_waited_for_and_its_answer_taken() {
     let (scripted, _) = peer(&[Frame::ping(*b"answered", true)]);
-    let mut connection = Connection::start(scripted, true, Limits::DEFAULT).expect("started");
+    let mut connection =
+        Connection::start(scripted, true, Limits::DEFAULT, still()).expect("started");
     connection.ping(*b"answered").expect("answered");
     assert_eq!(connection.outstanding, [] as [[u8; 8]; 0]);
 }

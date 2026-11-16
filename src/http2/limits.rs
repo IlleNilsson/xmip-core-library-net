@@ -6,9 +6,11 @@
 //!
 //! The numbers are defaults. A caller sets its own through
 //! [`Server::handshake_within`](super::Server::handshake_within) and
-//! [`Client::handshake_within`](super::Client::handshake_within).
+//! [`Client::handshake_within`](super::Client::handshake_within). The span
+//! is counted on the caller's clock, the reading its handshake was handed
+//! ([`Now`](super::Now)).
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::error::{ErrorCode, Violation};
 use super::frame::MAX_STREAM_ID;
@@ -71,17 +73,18 @@ pub(super) enum Count {
     Empty,
 }
 
-/// The frames counted in the span that began at `since`.
+/// The frames counted in the span that began at `since`, a reading of the
+/// connection's clock in nanoseconds.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Tally {
-    since: Instant,
+    since: i128,
     control: u32,
     empty: u32,
 }
 
 impl Tally {
     /// Nothing counted, in a span that begins `now`.
-    pub(super) const fn new(now: Instant) -> Self {
+    pub(super) const fn new(now: i128) -> Self {
         Self {
             since: now,
             control: 0,
@@ -99,10 +102,10 @@ impl Tally {
     pub(super) fn count(
         &mut self,
         what: Count,
-        now: Instant,
+        now: i128,
         limits: &Limits,
     ) -> Result<(), Violation> {
-        if now.saturating_duration_since(self.since) >= limits.span {
+        if crate::passed(self.since, now, limits.span) {
             *self = Self::new(now);
         }
         let (counted, most, frames) = match what {
@@ -135,7 +138,7 @@ mod tests {
             empty_frames: 1,
             ..Limits::DEFAULT
         };
-        let start = Instant::now();
+        let start = 7_000;
         let mut tally = Tally::new(start);
         for _ in 0..3 {
             tally.count(Count::Control, start, &limits).expect("within");
@@ -147,7 +150,14 @@ mod tests {
             .count(Count::Control, start, &limits)
             .expect_err("one over");
         assert_eq!(calm.code, ErrorCode::EnhanceYourCalm);
-        let next = start + limits.span;
+        let span = i128::try_from(limits.span.as_nanos()).expect("a second");
+        assert!(
+            tally
+                .count(Count::Control, start + span - 1, &limits)
+                .is_err(),
+            "a nanosecond short of the span counts on"
+        );
+        let next = start + span;
         tally
             .count(Count::Control, next, &limits)
             .expect("a new span");

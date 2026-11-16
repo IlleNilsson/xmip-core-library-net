@@ -10,7 +10,7 @@
 
 use std::io::{Read, Write};
 
-use super::{Client, Limits, Server};
+use super::{Client, Limits, Now, Server};
 use crate::NetError;
 use crate::http::{Request, Response};
 
@@ -31,8 +31,8 @@ impl<'a> BoxedClient<'a> {
     /// # Errors
     ///
     /// Where the connection broke.
-    pub fn handshake(io: Boxed<'a>, scheme: &str) -> Result<Self, NetError> {
-        Client::handshake(io, scheme).map(Self)
+    pub fn handshake(io: Boxed<'a>, scheme: &str, now: Now) -> Result<Self, NetError> {
+        Client::handshake(io, scheme, now).map(Self)
     }
 
     /// As [`Client::handshake_within`].
@@ -40,8 +40,13 @@ impl<'a> BoxedClient<'a> {
     /// # Errors
     ///
     /// Where the connection broke.
-    pub fn handshake_within(io: Boxed<'a>, scheme: &str, limits: Limits) -> Result<Self, NetError> {
-        Client::handshake_within(io, scheme, limits).map(Self)
+    pub fn handshake_within(
+        io: Boxed<'a>,
+        scheme: &str,
+        now: Now,
+        limits: Limits,
+    ) -> Result<Self, NetError> {
+        Client::handshake_within(io, scheme, now, limits).map(Self)
     }
 
     /// As [`Client::send`].
@@ -68,8 +73,8 @@ impl<'a> BoxedServer<'a> {
     /// # Errors
     ///
     /// Where the connection broke or did not begin with the preface.
-    pub fn handshake(io: Boxed<'a>) -> Result<Self, NetError> {
-        Server::handshake(io).map(Self)
+    pub fn handshake(io: Boxed<'a>, now: Now) -> Result<Self, NetError> {
+        Server::handshake(io, now).map(Self)
     }
 
     /// As [`Server::handshake_within`].
@@ -77,8 +82,8 @@ impl<'a> BoxedServer<'a> {
     /// # Errors
     ///
     /// Where the connection broke or did not begin with the preface.
-    pub fn handshake_within(io: Boxed<'a>, limits: Limits) -> Result<Self, NetError> {
-        Server::handshake_within(io, limits).map(Self)
+    pub fn handshake_within(io: Boxed<'a>, now: Now, limits: Limits) -> Result<Self, NetError> {
+        Server::handshake_within(io, now, limits).map(Self)
     }
 
     /// As [`Server::next_request`].
