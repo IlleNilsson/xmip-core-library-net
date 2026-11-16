@@ -20,6 +20,13 @@
 //! met in it, each counting from the block's first port: a port one had
 //! found free, the other found free too, and bound first (the runtime's
 //! plane test, 2026-10-20).
+//!
+//! Beside it, an HTTP/2 peer in memory that floods `PING`s either side of a
+//! span a test passes on its clock ([`pinging`]): what a test holds an
+//! HTTP/2 server to, that its frames in a span are counted on the Clock its
+//! caller handed it.
+
+pub mod pinging;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::OnceLock;
