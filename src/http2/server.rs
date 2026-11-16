@@ -6,6 +6,7 @@
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
 
+use super::Now;
 use super::connection::Connection;
 use super::error::ErrorCode;
 use super::limits::Limits;
@@ -27,15 +28,15 @@ pub struct Server<S: Read + Write> {
 
 impl<S: Read + Write> Server<S> {
     /// Read the client's preface off `io` and answer with this side's
-    /// `SETTINGS`, within [`Limits::DEFAULT`]. A connection
-    /// [`sniff`](super::sniff) looked at is read through
-    /// [`Replayed`](super::Replayed), from its first octet.
+    /// `SETTINGS`, within [`Limits::DEFAULT`] counted on the clock `now`
+    /// reads. A connection [`sniff`](super::sniff) looked at is read
+    /// through [`Replayed`](super::Replayed), from its first octet.
     ///
     /// # Errors
     ///
     /// Where the connection broke, or did not open with the preface.
-    pub fn handshake(io: S) -> Result<Self, NetError> {
-        Self::handshake_within(io, Limits::DEFAULT)
+    pub fn handshake(io: S, now: Now) -> Result<Self, NetError> {
+        Self::handshake_within(io, now, Limits::DEFAULT)
     }
 
     /// As [`Server::handshake`], the connection held to `limits`.
@@ -43,7 +44,7 @@ impl<S: Read + Write> Server<S> {
     /// # Errors
     ///
     /// Where the connection broke, or did not open with the preface.
-    pub fn handshake_within(mut io: S, limits: Limits) -> Result<Self, NetError> {
+    pub fn handshake_within(mut io: S, now: Now, limits: Limits) -> Result<Self, NetError> {
         let mut preface = [0u8; PREFACE.len()];
         io.read_exact(&mut preface)
             .map_err(|failed| NetError::from_io("reading the preface", &failed))?;
@@ -53,7 +54,7 @@ impl<S: Read + Write> Server<S> {
             ));
         }
         Ok(Self {
-            connection: Connection::start(io, false, limits)?,
+            connection: Connection::start(io, false, limits, now)?,
             answering: BTreeSet::new(),
         })
     }
@@ -197,7 +198,8 @@ impl<S: Read + Write> Server<S> {
 }
 
 /// Serve every request `io` carries with `answer`, until the client goes
-/// away or closes: how many were answered.
+/// away or closes, its spans counted on the clock `now` reads: how many
+/// were answered.
 ///
 /// # Errors
 ///
@@ -205,9 +207,10 @@ impl<S: Read + Write> Server<S> {
 /// [`Server::respond`].
 pub fn serve<S: Read + Write>(
     io: S,
+    now: Now,
     mut answer: impl FnMut(&Request) -> Response,
 ) -> Result<usize, NetError> {
-    let mut server = Server::handshake(io)?;
+    let mut server = Server::handshake(io, now)?;
     let mut answered = 0;
     while let Some((stream, request)) = server.next_request()? {
         server.respond(stream, &answer(&request))?;

@@ -4,7 +4,6 @@
 //! 5.4).
 
 use std::io::{Read, Write};
-use std::time::Instant;
 
 use super::connection::{Connection, Continuing};
 use super::error::{ErrorCode, Violation};
@@ -78,7 +77,8 @@ impl<S: Read + Write> Connection<S> {
             return Err(Violation::protocol(format!("{kind:?} on stream {}", frame.stream)).into());
         }
         if let Some(what) = counted(frame) {
-            self.tally.count(what, Instant::now(), &self.limits)?;
+            let now = (self.now)();
+            self.tally.count(what, now, &self.limits)?;
         }
         match frame.kind {
             Kind::Data => self.data(frame),

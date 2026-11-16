@@ -74,7 +74,7 @@ pub(crate) fn attempt(
     Name::unspecified(address).bind(socket)?;
     let name = Name::of(address);
     let event = Event::new()?;
-    waited(On::Socket(socket), &event, within, |overlapped| {
+    waited(On::Socket(socket), &event, within, None, |overlapped| {
         // SAFETY: `name` holds a socket address of its length and outlives
         // the operation, as does `overlapped`, which `waited` ends before
         // it returns; nothing is sent with the connect.
