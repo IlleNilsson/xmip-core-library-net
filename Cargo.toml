@@ -36,9 +36,10 @@ nix = { version = "0.31", default-features = false, features = ["fs"] }
 
 [features]
 # A loopback address no one holds (`fixture`), the estate's one for every
-# test that binds a port later or wants nothing listening. A crate asks for
-# it from its dev-dependencies, so it reaches tests and never a production
-# build.
+# test that binds a port later or wants nothing listening, and an HTTP/2
+# peer flooding PINGs either side of a span (`fixture::pinging`). A crate
+# asks for it from its dev-dependencies, so it reaches tests and never a
+# production build.
 test-support = []
 
 # The module's timing program (doc/governance/rust-style.md section 5c): a
