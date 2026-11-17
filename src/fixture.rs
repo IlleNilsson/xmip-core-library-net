@@ -21,10 +21,11 @@
 //! found free, the other found free too, and bound first (the runtime's
 //! plane test, 2026-10-20).
 //!
-//! Beside it, an HTTP/2 peer in memory that floods `PING`s either side of a
-//! span a test passes on its clock ([`pinging`]): what a test holds an
-//! HTTP/2 server to, that its frames in a span are counted on the Clock its
-//! caller handed it.
+//! Beside it, an HTTP/2 peer that floods `PING`s either side of a span a
+//! test passes on its clock ([`pinging`]): a client in memory, what a test
+//! holds an HTTP/2 server to, and a server on a connection a client opened,
+//! what it holds the client to — that each counts its peer's frames in a
+//! span on the Clock its caller handed it.
 
 pub mod pinging;
 
