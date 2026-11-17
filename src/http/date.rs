@@ -1,7 +1,7 @@
 //! The moment a header carries, as RFC 1123 writes it:
 //! `Tue, 08 Sep 2026 12:00:00 GMT`, RFC 9110's `HTTP-date`, what `Date`
 //! and Azure's `x-ms-date` take. It is written off `codec::civil`, the
-//! estate's one civil calendar; s3 and azure-blob each carried the clock
+//! estate's one civil calendar; aws-s3 and azure-blob each carried the clock
 //! until 2026-09-14, and this file until 2026-09-24. A header format is
 //! HTTP's: the http transport held it until 2026-09-28, when it came here
 //! beside the codec that writes the header, so a crate that signs a header
