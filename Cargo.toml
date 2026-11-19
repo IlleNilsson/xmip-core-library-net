@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/IlleNilsson/xmip-core-library-net"
-description = "Network primitives the capabilities share, one copy of each: an address, a URI's authority, path and endpoint, a network in prefix notation, a MAC address, the one TCP connect, a line-oriented head, HTTP/1.1 and HTTP/2 with HPACK, both halves, and the named pipe the named pipe transport and the runtime's local endpoint share."
+description = "Network primitives the capabilities share, one copy of each: an address, a URI's authority, path and endpoint, a network in prefix notation, a MAC address, the one TCP connect, a line-oriented head, HTTP/1.1 and HTTP/2 with HPACK, both halves, the named pipe the named pipe transport and the local endpoint share, and JSON-RPC 2.0, both framings."
 
 [lib]
 path = "src/lib.rs"
@@ -17,6 +17,9 @@ path = "src/lib.rs"
 # the wide string the named pipe's paths, descriptor and names cross to
 # Windows as (`codec::wide`).
 codec ={ package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
+# JSON-RPC 2.0's messages are JSON values (`rpc`), so only a crate that
+# asks for the `rpc` feature links a JSON library.
+serde_json = { version = "1", optional = true }
 
 # The named pipe (`pipe`; ADR-0014, amendment 2026-10-21): on Windows made,
 # connected, read and written through the system's own calls, its security
@@ -41,6 +44,13 @@ nix = { version = "0.31", default-features = false, features = ["fs"] }
 # asks for it from its dev-dependencies, so it reaches tests and never a
 # production build.
 test-support = []
+
+# JSON-RPC 2.0, its messages and both its framings (`rpc`): the VS Code
+# server and `xmip mcp` ask for it. The transports that share the rest of
+# this crate never do, so none of them links serde_json, whose comparisons
+# of a number with a JSON value would make every `== []` of theirs
+# ambiguous (2026-11-19).
+rpc = ["dep:serde_json"]
 
 # The module's timing program (doc/governance/rust-style.md section 5c): a
 # plain cargo test leaves it out, and the landing runs it after every other

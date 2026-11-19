@@ -75,8 +75,20 @@ pub fn until(
 /// Where the connection could not be read, the line ran past
 /// [`MAX_LINE`], or it is not UTF-8.
 pub fn line(reader: &mut impl BufRead) -> Result<Option<String>, NetError> {
+    line_within(reader, MAX_LINE)
+}
+
+/// The next line as [`line`] reads it, under `ceiling` rather than
+/// [`MAX_LINE`]: for a protocol whose line is a whole message, a JSON-RPC
+/// message a line (`rpc::line`).
+///
+/// # Errors
+///
+/// Where the connection could not be read, the line ran past `ceiling`,
+/// or it is not UTF-8.
+pub fn line_within(reader: &mut impl BufRead, ceiling: usize) -> Result<Option<String>, NetError> {
     let mut raw = Vec::new();
-    if until(reader, b'\n', MAX_LINE, &mut raw)? == 0 {
+    if until(reader, b'\n', ceiling, &mut raw)? == 0 {
         return Ok(None);
     }
     let length = trim_eol(&raw).len();
