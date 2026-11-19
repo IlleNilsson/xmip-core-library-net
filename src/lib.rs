@@ -18,7 +18,10 @@
 //! ([`http2`]), and gRPC's framing of a message on it ([`grpc`]); and a
 //! long-lived connection read until its side ends ([`watched`]); and a
 //! named local endpoint, where it is on this system and the named pipe
-//! itself, made, accepted, connected to, read and written ([`pipe`]); and a
+//! itself, made, accepted, connected to, read and written ([`pipe`]); and,
+//! on Unix, a path a listener binds, claimed before it is bound, so
+//! another's or a file of another kind refuses it and only the listener's
+//! own file goes with it (`socket_file`); and a
 //! listener's
 //! accept woken by its stop until it has heard ([`accepting`]); and a login
 //! a server is offered, with the check it is handed to admit one
@@ -65,6 +68,8 @@ pub mod read;
 pub mod reply;
 #[cfg(feature = "rpc")]
 pub mod rpc;
+#[cfg(unix)]
+pub mod socket_file;
 #[cfg(windows)]
 pub mod system;
 mod target;

@@ -1,7 +1,9 @@
 //! A named pipe on Unix: a FIFO, a special file a reader opens and a
 //! writer opens, which the kernel joins. A writer's close is the end of
 //! what the reader reads. A FIFO has no peer the kernel names, and admits
-//! by its file's mode: its owner's alone, `0600`.
+//! by its file's mode: its owner's alone, `0600`. Its path is claimed
+//! before it is made, as a socket's is (`crate::socket_file`), and only
+//! its own FIFO goes with it.
 //!
 //! An open of a FIFO blocks until the other end opens, so an open within
 //! a time happens on a thread of its own, waited on with a deadline. An
@@ -13,44 +15,48 @@
 //! behind and nothing is handed out without its peer.
 
 use std::fs::{File, OpenOptions};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::time::Duration;
 
-/// The made end, a FIFO waiting for a writer.
+use crate::socket_file::{Claim, Kind, at, claimed};
+
+/// The made end, a FIFO waiting for a writer; its FIFO, its own and
+/// nothing that took its place, goes with it.
 pub struct Listener {
-    path: PathBuf,
+    claim: Claim,
 }
 
 impl Listener {
-    /// Make the FIFO at `path`, its owner's alone; a FIFO a previous run
-    /// left there is used.
+    /// Make the FIFO at `path`, its owner's alone, on the path claimed
+    /// first: a FIFO a stopped one left there is made anew.
     ///
     /// # Errors
     ///
-    /// `admit` naming anyone, which a FIFO's mode cannot say; where the
-    /// directory is missing or the name not permitted.
+    /// `admit` naming anyone, which a FIFO's mode cannot say; `AddrInUse`
+    /// where another holds the path; `AlreadyExists` where a file of
+    /// another kind is there, which is kept; where the directory is
+    /// missing or the name not permitted. Each but the first names the
+    /// path.
     pub fn bind(path: &Path, admit: &[String]) -> std::io::Result<Self> {
+        use nix::sys::stat::Mode;
         if !admit.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "a FIFO admits its owner alone",
             ));
         }
-        if !path.exists() {
-            use nix::sys::stat::Mode;
-            nix::unistd::mkfifo(path, Mode::S_IRUSR | Mode::S_IWUSR)
-                .map_err(std::io::Error::from)?;
-        }
-        Ok(Self {
-            path: path.to_path_buf(),
-        })
+        let mut claim = claimed(path, Kind::Fifo)?;
+        nix::unistd::mkfifo(path, Mode::S_IRUSR | Mode::S_IWUSR)
+            .map_err(|error| at(path, &error.into()))?;
+        claim.made()?;
+        Ok(Self { claim })
     }
 
     /// Where the pipe is.
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.path
+        self.claim.path()
     }
 
     /// The next writer's connection, once one has opened the FIFO: for as
@@ -61,13 +67,7 @@ impl Listener {
     /// `TimedOut` where no writer came within `within`; where the FIFO
     /// could not be opened.
     pub fn accept(&self, within: Option<Duration>) -> std::io::Result<Stream> {
-        opened(&self.path, false, within).map(Stream)
-    }
-}
-
-impl Drop for Listener {
-    fn drop(&mut self) {
-        std::fs::remove_file(&self.path).ok();
+        opened(self.claim.path(), false, within).map(Stream)
     }
 }
 
