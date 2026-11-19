@@ -22,7 +22,8 @@
 //! listener's
 //! accept woken by its stop until it has heard ([`accepting`]); and a login
 //! a server is offered, with the check it is handed to admit one
-//! ([`login`]); on Windows, the one wait for an overlapped operation every
+//! ([`login`]); JSON-RPC 2.0, its messages and both its framings, by a
+//! `Content-Length` header and one message a line (`rpc`, the `rpc` feature); on Windows, the one wait for an overlapped operation every
 //! call into Windows here and a serial port's take (`system::overlapped`);
 //! and, for tests
 //! alone, a loopback address no one holds (`fixture`, `test-support`).
@@ -62,6 +63,8 @@ mod network;
 pub mod pipe;
 pub mod read;
 pub mod reply;
+#[cfg(feature = "rpc")]
+pub mod rpc;
 #[cfg(windows)]
 pub mod system;
 mod target;
