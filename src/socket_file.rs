@@ -326,36 +326,14 @@ fn what(found: FileType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use file::temporary::Folder;
     use std::io::{Read, Write};
     use std::sync::{Arc, Barrier};
 
-    /// A folder of a test's own under the temporary directory, removed with
-    /// everything in it when the test ends, also when it fails.
-    struct Folder(PathBuf);
-
-    impl Folder {
-        fn new(test: &str) -> Self {
-            let folder =
-                std::env::temp_dir().join(format!("xmip-net-{test}-{}", std::process::id()));
-            std::fs::create_dir_all(&folder).expect("a folder");
-            Self(folder)
-        }
-
-        fn at(&self, name: &str) -> PathBuf {
-            self.0.join(name)
-        }
-    }
-
-    impl Drop for Folder {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     #[test]
     fn an_ordinary_file_at_the_path_is_refused_and_kept() {
-        let folder = Folder::new("ordinary");
-        let path = folder.at("in.sock");
+        let folder = Folder::new("net-ordinary");
+        let path = folder.join("in.sock");
         std::fs::write(&path, b"kept").expect("an ordinary file");
         let refused = SocketFile::bind(&path).expect_err("refused");
         assert_eq!(refused.kind(), ErrorKind::AlreadyExists, "{refused}");
@@ -367,7 +345,7 @@ mod tests {
 
         // A listener whose socket was replaced by another's file leaves
         // that file where it is as it goes.
-        let other = folder.at("other.sock");
+        let other = folder.join("other.sock");
         let bound = SocketFile::bind(&other).expect("bound");
         std::fs::remove_file(&other).expect("its socket taken away");
         std::fs::write(&other, b"someone else's").expect("a file in its place");
@@ -377,8 +355,8 @@ mod tests {
 
     #[test]
     fn a_socket_something_answers_on_is_refused_and_still_answers() {
-        let folder = Folder::new("answers");
-        let path = folder.at("in.sock");
+        let folder = Folder::new("net-answers");
+        let path = folder.join("in.sock");
         let answering = UnixListener::bind(&path).expect("something listens");
         let refused = SocketFile::bind(&path).expect_err("refused");
         assert_eq!(refused.kind(), ErrorKind::AddrInUse, "{refused}");
@@ -394,8 +372,8 @@ mod tests {
 
     #[test]
     fn a_stale_socket_nobody_answers_is_replaced() {
-        let folder = Folder::new("stale");
-        let path = folder.at("in.sock");
+        let folder = Folder::new("net-stale");
+        let path = folder.join("in.sock");
         drop(UnixListener::bind(&path).expect("a socket nobody listens on now"));
         assert!(path.exists(), "the socket file stays behind");
         let bound = SocketFile::bind(&path).expect("the stale one replaced");
@@ -407,20 +385,23 @@ mod tests {
         assert_eq!(byte, *b"y");
         drop(bound);
         assert!(!path.exists(), "its own socket goes with it");
-        assert!(!folder.at("in.sock.lock").exists(), "and its lock file");
+        assert!(!folder.join("in.sock.lock").exists(), "and its lock file");
     }
 
     #[test]
     fn a_bind_and_its_release_leave_no_lock_file() {
-        let folder = Folder::new("released");
-        let bound = SocketFile::bind(&folder.at("in.sock")).expect("bound");
-        assert!(folder.at("in.sock.lock").exists(), "held while it listens");
+        let folder = Folder::new("net-released");
+        let bound = SocketFile::bind(&folder.join("in.sock")).expect("bound");
+        assert!(
+            folder.join("in.sock.lock").exists(),
+            "held while it listens"
+        );
         drop(bound);
-        let made = crate::pipe::Listener::bind(&folder.at("in.pipe"), &[]).expect("made");
-        assert!(folder.at("in.pipe.lock").exists(), "held while it waits");
+        let made = crate::pipe::Listener::bind(&folder.join("in.pipe"), &[]).expect("made");
+        assert!(folder.join("in.pipe.lock").exists(), "held while it waits");
         drop(made);
         for left in ["in.sock", "in.sock.lock", "in.pipe", "in.pipe.lock"] {
-            assert!(!folder.at(left).exists(), "{left} is left behind");
+            assert!(!folder.join(left).exists(), "{left} is left behind");
         }
     }
 
@@ -451,9 +432,9 @@ mod tests {
 
     #[test]
     fn a_start_racing_a_release_never_holds_a_removed_lock() {
-        let folder = Folder::new("racing");
-        let socket = folder.at("in.sock");
-        let pipe = folder.at("in.pipe");
+        let folder = Folder::new("net-racing");
+        let socket = folder.join("in.sock");
+        let pipe = folder.join("in.pipe");
         for _ in 0..4 {
             raced(&socket, Kind::Socket, SocketFile::bind);
             raced(&pipe, Kind::Fifo, |path| {
@@ -461,14 +442,14 @@ mod tests {
             });
         }
         for left in ["in.sock", "in.sock.lock", "in.pipe", "in.pipe.lock"] {
-            assert!(!folder.at(left).exists(), "{left} is left behind");
+            assert!(!folder.join(left).exists(), "{left} is left behind");
         }
     }
 
     #[test]
     fn of_eight_simultaneous_starts_exactly_one_binds() {
-        let folder = Folder::new("eight");
-        let path = Arc::new(folder.at("in.sock"));
+        let folder = Folder::new("net-eight");
+        let path = Arc::new(folder.join("in.sock"));
         let starting = Arc::new(Barrier::new(8));
         let bound: Vec<std::io::Result<SocketFile>> = (0..8)
             .map(|_| {
@@ -498,8 +479,8 @@ mod tests {
 
     #[test]
     fn a_refusal_in_the_system_s_own_words_names_the_path() {
-        let folder = Folder::new("words");
-        let path = folder.at("missing").join("in.sock");
+        let folder = Folder::new("net-words");
+        let path = folder.join("missing").join("in.sock");
         let refused = SocketFile::bind(&path).expect_err("no folder");
         assert_eq!(refused.kind(), ErrorKind::NotFound, "{refused}");
         assert!(
@@ -510,8 +491,8 @@ mod tests {
 
     #[test]
     fn an_ordinary_file_where_a_fifo_goes_is_refused_and_kept() {
-        let folder = Folder::new("fifo");
-        let path = folder.at("in.pipe");
+        let folder = Folder::new("net-fifo");
+        let path = folder.join("in.pipe");
         std::fs::write(&path, b"kept").expect("an ordinary file");
         let refused = crate::pipe::Listener::bind(&path, &[])
             .err()
