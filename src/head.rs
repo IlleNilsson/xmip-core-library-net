@@ -48,38 +48,59 @@ pub fn read_head(reader: &mut impl BufRead) -> Result<Vec<String>, NetError> {
     Ok(lines)
 }
 
-/// Find one header value in a head [`read_head`] read.
+/// Header lines as names and values, the space and tabs around each value
+/// taken off: the lines after the first of a head [`read_head`] read, or a
+/// trailer's. A line without a colon is not a field and is passed over.
 ///
-/// Case-insensitive, which is not a convenience: a peer sending
-/// `content-length` is as correct as one sending `Content-Length`.
+/// A name is taken as it came, never trimmed: until 2026-11-22 it was, so
+/// `Content-Length : 3` and a folded ` Content-Length: 3` each stated a
+/// length that another reader would not see.
 ///
-/// Skips the first line, which is the request or status line rather than a
-/// header.
-#[must_use]
-pub fn header<'a>(lines: &'a [String], name: &str) -> Option<&'a str> {
-    lines.iter().skip(1).find_map(|line| {
-        let (key, value) = line.split_once(':')?;
-
-        key.trim().eq_ignore_ascii_case(name).then(|| value.trim())
-    })
+/// # Errors
+///
+/// What two readers can read apart, refused rather than repaired (RFC 9112
+/// sections 2.2, 5.1 and 5.2; RFC 9110 section 5.5): a line folded onto the
+/// one before it, a name that is not a token — whitespace before its colon,
+/// or no name at all — and a value holding a CR or a NUL.
+pub fn fields(lines: &[String]) -> Result<Vec<(String, String)>, NetError> {
+    let mut fields = Vec::with_capacity(lines.len());
+    for line in lines {
+        if line.starts_with([' ', '\t']) {
+            return Err(NetError::new(format!(
+                "a field line folded onto the one before it: {line:?}"
+            )));
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.is_empty() || !name.chars().all(token_character) {
+            return Err(NetError::new(format!(
+                "a field name that is not a token: {name:?}"
+            )));
+        }
+        if value.contains(['\r', '\0']) {
+            return Err(NetError::new(format!(
+                "the field {name} holds a CR or a NUL"
+            )));
+        }
+        let value = value.trim_matches([' ', '\t']);
+        fields.push((name.to_string(), value.to_string()));
+    }
+    Ok(fields)
 }
 
-/// Header lines as names and values, each trimmed; a line without a colon
-/// is not a header and is passed over. The lines after the first of a
-/// head [`read_head`] read, or a trailer's.
+/// Whether `character` may stand in a token, which a field name is (RFC
+/// 9110 section 5.6.2) and a cookie's name too (RFC 6265 section 4.1.1):
+/// visible ASCII but for the delimiters.
 #[must_use]
-pub fn fields(lines: &[String]) -> Vec<(String, String)> {
-    lines
-        .iter()
-        .filter_map(|line| line.split_once(':'))
-        .map(|(name, value)| (name.trim().to_string(), value.trim().to_string()))
-        .collect()
+pub fn token_character(character: char) -> bool {
+    character.is_ascii_graphic() && !"\"(),/:;<=>?@[\\]{}".contains(character)
 }
 
 /// `fields` appended to `head` as they are written, `name: value` and a
 /// CRLF each; the blank line that ends a head is the caller's, after
 /// whatever framing it adds.
-pub fn write_fields(head: &mut String, fields: &[(String, String)]) {
+pub fn write_fields<'a>(head: &mut String, fields: impl IntoIterator<Item = &'a (String, String)>) {
     for (name, value) in fields {
         head.push_str(name);
         head.push_str(": ");
@@ -94,25 +115,6 @@ mod tests {
     use std::fmt::Write;
 
     #[test]
-    fn a_header_is_found_however_the_peer_capitalized_it() {
-        let head = vec![
-            "POST /orders HTTP/1.1".to_string(),
-            "content-length: 8".to_string(),
-        ];
-
-        assert_eq!(header(&head, "Content-Length"), Some("8"));
-    }
-
-    #[test]
-    fn the_request_line_is_not_a_header() {
-        // "GET http://x/y HTTP/1.1" splits on a colon in an absolute URI and
-        // would answer the wrong thing if the first line were searched.
-        let head = vec!["GET http://x/y HTTP/1.1".to_string()];
-
-        assert_eq!(header(&head, "http"), None);
-    }
-
-    #[test]
     fn fields_are_written_as_they_are_read() {
         let written = vec![
             ("Host".to_string(), "x".to_string()),
@@ -123,11 +125,31 @@ mod tests {
         assert_eq!(head, "NOTIFY * HTTP/1.1\r\nHost: x\r\nEXT: \r\n");
         head.push_str("\r\n");
         let read = read_head(&mut head.as_bytes()).expect("read");
-        assert_eq!(fields(&read[1..]), written);
+        assert_eq!(fields(&read[1..]).expect("fields"), written);
         assert_eq!(
-            fields(&["no colon".to_string()]),
+            fields(&["no colon".to_string()]).expect("passed over"),
             [] as [(String, String); 0]
         );
+    }
+
+    #[test]
+    fn a_field_two_readers_can_read_apart_is_refused() {
+        for line in [
+            "Content-Length : 3",
+            "Content-Length\t: 3",
+            " Content-Length: 3",
+            "\tfolded",
+            ": 3",
+            "Content-Length\u{b}: 3",
+            "Con(tent: 3",
+            "X-Said: a\rContent-Length: 3",
+            "X-Said: a\0b",
+        ] {
+            let refused = fields(&[line.to_string()]).expect_err(line);
+            assert_eq!(refused.io, None, "the peer's failure: {line:?}");
+        }
+        assert!("!#$%&'*+-.^_`|~0aZ".chars().all(token_character));
+        assert!(!" \"(),/:;<=>?@[\\]{}é".chars().any(token_character));
     }
 
     #[test]

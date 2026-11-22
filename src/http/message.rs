@@ -4,6 +4,7 @@
 
 use std::io::Write;
 
+use super::body::frames;
 use super::find;
 use crate::NetError;
 use crate::head::write_fields;
@@ -29,6 +30,9 @@ pub(super) struct Message<'a> {
 /// line and the body —
 /// or, where it has a trailer, the body as one chunk and the trailer after
 /// the last; an answer that carries no body writes no length and no body.
+/// The framing is this writer's alone: a `Content-Length` or
+/// `Transfer-Encoding` among the headers or trailers it is handed is not
+/// written.
 pub(super) fn write_message(
     writer: &mut impl Write,
     message: &Message<'_>,
@@ -36,7 +40,7 @@ pub(super) fn write_message(
 ) -> Result<(), NetError> {
     let lines = |fields: &[(String, String)]| {
         let mut lines = String::new();
-        write_fields(&mut lines, fields);
+        write_fields(&mut lines, fields.iter().filter(|(name, _)| !frames(name)));
         lines
     };
     let close = if message.close && find(message.headers, "connection").is_none() {
@@ -68,4 +72,52 @@ pub(super) fn write_message(
         .and_then(|()| writer.write_all(tail.as_bytes()))
         .and_then(|()| writer.flush())
         .map_err(|failed| NetError::from_io(&format!("writing {what}"), &failed))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::http::{
+        Request, Response, read_request, read_response, write_request, write_response,
+    };
+
+    #[test]
+    fn the_writer_alone_writes_the_framing() {
+        // Until 2026-11-22 a Content-Length or Transfer-Encoding a caller
+        // handed the writer was written beside the writer's own.
+        let request = Request::new("POST", "/")
+            .header("Host", "x")
+            .header("content-length", "99")
+            .header("Transfer-Encoding", "chunked")
+            .body(b"abc");
+        let mut written = Vec::new();
+        write_request(&mut written, &request).expect("written");
+        let text = String::from_utf8_lossy(&written);
+        assert_eq!(text.matches("ength:").count(), 1, "{text}");
+        assert!(text.contains("Content-Length: 3\r\n"), "{text}");
+        assert!(!text.contains("ncoding"), "{text}");
+        let read = read_request(&mut &written[..]).expect("read").expect("one");
+        assert_eq!(read.body, b"abc");
+
+        let answer = Response::new(200)
+            .header("Content-Length", "1")
+            .body(b"abc")
+            .trailer("Transfer-Encoding", "gzip")
+            .trailer("grpc-status", "0");
+        let mut written = Vec::new();
+        write_response(&mut written, &answer).expect("written");
+        let text = String::from_utf8_lossy(&written);
+        assert!(!text.contains("Content-Length"), "{text}");
+        assert_eq!(text.matches("Transfer-Encoding:").count(), 1, "{text}");
+        let back = read_response(&mut &written[..]).expect("read");
+        assert_eq!(back.body, b"abc");
+        assert_eq!(
+            back.trailers,
+            [("grpc-status".to_string(), "0".to_string())]
+        );
+
+        let mut written = Vec::new();
+        let unchanged = Response::new(304).header("Content-Length", "7");
+        write_response(&mut written, &unchanged).expect("written");
+        assert!(!String::from_utf8_lossy(&written).contains("Length"));
+    }
 }

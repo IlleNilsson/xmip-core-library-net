@@ -7,8 +7,11 @@
 //! connection unless it names its own `Connection` — `WebDAV` keeps its
 //! connection for the next method, and says `keep-alive` on both sides. An
 //! answer is read by its length, its chunks or its end; a 1xx, a 204 or a
-//! 304 has no body at all. Both halves are here so the two cannot drift: a
-//! header written one way is read the same way.
+//! 304 has no body at all, and an interim answer — a 1xx but 101 — is read
+//! past to the final one. Both halves are here so the two cannot drift: a
+//! header written one way is read the same way, and framing two readers
+//! could read apart is refused (`body`), a request so refused answered
+//! `400` ([`refuse`]).
 //!
 //! What a capability needs to ask a service beside it — an Open Policy
 //! Agent, an authorization server's introspection endpoint, a broker's
@@ -35,6 +38,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 
 use crate::NetError;
 use crate::head::{fields, read_head};
+use body::Framing;
 use codec::percent::{decode_pairs, encode_pairs};
 use message::{Message, write_message};
 
@@ -130,28 +134,30 @@ pub fn exchange<S: Read + Write>(mut stream: S, request: &Request) -> Result<Res
     read_response(&mut BufReader::new(stream))
 }
 
-/// Write `request` over a connection kept for the next, read its answer,
-/// and say whether the connection can carry another: the request says no
-/// `Connection: close` — HTTP/1.1 keeps a connection unless one side says
-/// otherwise — and the connection is spent where the answer closes it or
-/// was framed by the connection's end.
+/// Write `request` over a connection kept for the next and read its answer
+/// through `connection`, the one reader the connection keeps for its life,
+/// so what it read past one answer is the next one's; and say whether the
+/// connection can carry another: the request says no `Connection: close` —
+/// HTTP/1.1 keeps a connection unless one side says otherwise — and the
+/// connection is spent where the answer closes it, was framed by the
+/// connection's end, or switched it to another protocol (`101`). Until
+/// 2026-11-22 each answer was read through a reader of its own, dropped
+/// with whatever it had read past that answer.
 ///
 /// # Errors
 ///
 /// As [`exchange`].
 pub fn exchange_kept<S: Read + Write>(
-    stream: &mut S,
+    connection: &mut BufReader<S>,
     request: &Request,
 ) -> Result<(Response, bool), NetError> {
-    write(stream, request, false)?;
-    let answer = read_response(&mut BufReader::new(&mut *stream))?;
+    write(connection.get_mut(), request, false)?;
+    let (answer, framing) = read_answer(connection)?;
     let closed = answer
         .header_value("connection")
         .is_some_and(|said| said.eq_ignore_ascii_case("close"));
-    let framed = bodiless(answer.status)
-        || answer.header_value("content-length").is_some()
-        || answer.header_value("transfer-encoding").is_some();
-    Ok((answer, framed && !closed))
+    let spent = closed || answer.status == 101 || framing == Framing::ToEnd;
+    Ok((answer, !spent))
 }
 
 /// Write `request`, flushed: its request line, its headers, the length its
@@ -203,18 +209,59 @@ pub fn write_response(writer: &mut impl Write, response: &Response) -> Result<()
     write_message(writer, &message, "the answer")
 }
 
-/// Read one answer.
+/// Read one final answer, the interim answers before it — a 1xx but 101 —
+/// read past (RFC 9110 section 15.2). Until 2026-11-22 a `100 Continue` or
+/// a `103 Early Hints` was taken for the answer, and the final one left on
+/// the connection.
 ///
 /// # Errors
 ///
 /// A connection that closed before answering, a status line that is not
-/// HTTP/1.x, a transfer coding other than chunked, a broken chunk, or a
+/// HTTP/1.x, more interim answers than Xmip reads past, a field or framing
+/// two readers could read apart (`body::framing`), a broken chunk, or a
 /// body over [`crate::MAX_BODY`] or shorter than its `Content-Length`.
 pub fn read_response(reader: &mut impl BufRead) -> Result<Response, NetError> {
-    let head = read_head(reader)?;
-    let line = head
-        .first()
-        .ok_or_else(|| NetError::new("the connection closed before an answer"))?;
+    read_answer(reader).map(|(answer, _)| answer)
+}
+
+/// The most interim answers read past before the final one: far over the
+/// `100` and the `103` or two a server sends, and a bound on a server that
+/// never ends them.
+const MAX_INTERIM: usize = 16;
+
+/// The final answer, as [`read_response`] reads it, and how its body was
+/// framed.
+fn read_answer(reader: &mut impl BufRead) -> Result<(Response, Framing), NetError> {
+    for _ in 0..=MAX_INTERIM {
+        let head = read_head(reader)?;
+        let line = head
+            .first()
+            .ok_or_else(|| NetError::new("the connection closed before an answer"))?;
+        let (status, reason) = status_line(line)?;
+        let headers = fields(&head[1..])?;
+        if (100..200).contains(&status) && status != 101 {
+            continue;
+        }
+        let framing = if bodiless(status) {
+            Framing::Empty
+        } else {
+            body::framing(&headers, true)?
+        };
+        let (body, trailer) = body::read(reader, framing)?;
+        let answer = Response {
+            status,
+            reason: reason.to_string(),
+            headers,
+            body,
+            trailers: fields(&trailer)?,
+        };
+        return Ok((answer, framing));
+    }
+    Err(NetError::new("more interim answers than Xmip will read"))
+}
+
+/// The status a status line says, and its phrase.
+fn status_line(line: &str) -> Result<(u16, &str), NetError> {
     let not_http = || NetError::new(format!("what came back is not an HTTP answer: {line}"));
     let mut words = line
         .strip_prefix("HTTP/1.")
@@ -225,18 +272,7 @@ pub fn read_response(reader: &mut impl BufRead) -> Result<Response, NetError> {
         .filter(|code| code.len() == 3)
         .and_then(|code| code.parse::<u16>().ok())
         .ok_or_else(not_http)?;
-    let (body, trailer) = if bodiless(status) {
-        (Vec::new(), Vec::new())
-    } else {
-        body::read(reader, &head, true)?
-    };
-    Ok(Response {
-        status,
-        reason: words.next().unwrap_or_default().to_string(),
-        headers: fields(&head[1..]),
-        body,
-        trailers: fields(&trailer),
-    })
+    Ok((status, words.next().unwrap_or_default()))
 }
 
 /// The answering side: one request off a connection, or `None` where the
@@ -244,8 +280,10 @@ pub fn read_response(reader: &mut impl BufRead) -> Result<Response, NetError> {
 ///
 /// # Errors
 ///
-/// Where the connection broke, the request line is unreadable, or the body
-/// is broken or over [`crate::MAX_BODY`].
+/// Where the connection broke, the request line is unreadable, a field or
+/// the framing is one two readers could read apart (`body::framing`), or
+/// the body is broken or over [`crate::MAX_BODY`]: each but the first the
+/// peer's failure, which [`refuse`] answers.
 pub fn read_request(reader: &mut impl BufRead) -> Result<Option<Request>, NetError> {
     let head = read_head(reader)?;
     let Some(line) = head.first() else {
@@ -258,14 +296,41 @@ pub fn read_request(reader: &mut impl BufRead) -> Result<Option<Request>, NetErr
         )));
     };
     let (path, query) = split_target(target);
-    let (body, _) = body::read(reader, &head, false)?;
+    let headers = fields(&head[1..])?;
+    let (body, _) = body::read(reader, body::framing(&headers, false)?)?;
     Ok(Some(Request {
         method: method.to_string(),
         path,
         query,
-        headers: fields(&head[1..]),
+        headers,
         body,
     }))
+}
+
+/// The answering side's one request off `connection`, which it holds
+/// whole, as [`read_request`] reads it: a request refused is answered on
+/// the connection ([`refuse`]) before the refusal is returned.
+///
+/// # Errors
+///
+/// As [`read_request`].
+pub fn read_request_or_refuse<S: Read + Write>(
+    connection: &mut BufReader<S>,
+) -> Result<Option<Request>, NetError> {
+    read_request(connection).inspect_err(|failure| refuse(connection.get_mut(), failure))
+}
+
+/// Answer a request [`read_request`] refused on `writer`: `400 Bad
+/// Request`, the connection said closed after it, as a server answers a
+/// request it cannot read or frame (RFC 9112 sections 5.1 and 6.3). Where
+/// the connection broke instead nothing is written, since nothing would
+/// reach the peer; an answer that cannot be written ends the connection
+/// either way. For a server whose reader and writer are apart; one that
+/// holds its connection whole reads by [`read_request_or_refuse`].
+pub fn refuse(writer: &mut impl Write, failure: &NetError) {
+    if failure.io.is_none() {
+        drop(write_response(writer, &Response::new(400)));
+    }
 }
 
 /// A request target as its path, still encoded, and its query decoded —
@@ -320,17 +385,27 @@ fn find<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::collections::VecDeque;
 
-    /// A connection that has `answer` to give and keeps what is written.
+    /// A connection that has `chunks` to give, as they arrive: a read
+    /// never runs past the end of one. It keeps what is written.
     struct Wire {
-        answer: Cursor<Vec<u8>>,
+        chunks: VecDeque<Vec<u8>>,
         written: Vec<u8>,
     }
 
     impl Read for Wire {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            self.answer.read(buf)
+            let Some(chunk) = self.chunks.front_mut() else {
+                return Ok(0);
+            };
+            let taken = chunk.len().min(buf.len());
+            buf[..taken].copy_from_slice(&chunk[..taken]);
+            chunk.drain(..taken);
+            if chunk.is_empty() {
+                self.chunks.pop_front();
+            }
+            Ok(taken)
         }
     }
 
@@ -346,8 +421,13 @@ mod tests {
     }
 
     fn wire(answer: &[u8]) -> Wire {
+        apart(&[answer])
+    }
+
+    /// A connection whose `chunks` arrive one by one.
+    fn apart(chunks: &[&[u8]]) -> Wire {
         Wire {
-            answer: Cursor::new(answer.to_vec()),
+            chunks: chunks.iter().map(|chunk| chunk.to_vec()).collect(),
             written: Vec::new(),
         }
     }
@@ -538,9 +618,10 @@ mod tests {
     #[test]
     fn a_kept_exchange_says_no_close_and_knows_when_the_connection_is_spent() {
         let request = Request::new("GET", "/").header("Host", "example");
-        let cases: [(&[u8], bool); 5] = [
+        let cases: [(&[u8], bool); 6] = [
             (b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok", true),
             (b"HTTP/1.1 204 No Content\r\n\r\n", true),
+            (b"HTTP/1.1 101 Switching Protocols\r\n\r\n", false),
             (
                 b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
                 true,
@@ -552,11 +633,81 @@ mod tests {
             (b"HTTP/1.1 200 OK\r\n\r\nto the end", false),
         ];
         for (answer, reusable) in cases {
-            let mut connection = wire(answer);
+            let mut connection = BufReader::new(wire(answer));
             let (_, kept) = exchange_kept(&mut connection, &request).expect("answered");
             assert_eq!(kept, reusable, "{}", String::from_utf8_lossy(answer));
-            let written = String::from_utf8(connection.written).expect("text");
+            let written = String::from_utf8(connection.into_inner().written).expect("text");
             assert!(!written.contains("Connection:"), "{written}");
         }
+    }
+
+    #[test]
+    fn interim_answers_are_read_past_and_a_kept_connection_keeps_what_it_read_ahead() {
+        // Until 2026-11-22 a 100 Continue was taken for the answer, and on
+        // a kept connection what was read past an answer went with it.
+        let interim = &b"HTTP/1.1 100 Continue\r\n\r\n\
+            HTTP/1.1 103 Early Hints\r\nLink: </a.css>\r\n\r\n"[..];
+        let first = &b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"[..];
+        let second = &b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n"[..];
+        let request = Request::new("PUT", "/a")
+            .header("Host", "example")
+            .body(b"ok");
+        let together = [interim, first, second].concat();
+        for (connection, how) in [
+            (wire(&together), "together"),
+            (apart(&[interim, first, second]), "apart"),
+        ] {
+            let mut connection = BufReader::new(connection);
+            let (answer, kept) = exchange_kept(&mut connection, &request).expect(how);
+            assert_eq!(
+                (answer.status, answer.body.as_slice(), kept),
+                (200, &b"ok"[..], true),
+                "{how}"
+            );
+            let (answer, kept) = exchange_kept(&mut connection, &request).expect(how);
+            assert_eq!((answer.status, kept), (201, true), "{how}");
+        }
+    }
+
+    #[test]
+    fn a_101_is_the_final_answer_and_what_follows_it_the_new_protocol_s() {
+        let mut reader = &b"HTTP/1.1 100 Continue\r\n\r\n\
+            HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n\x81\x00"[..];
+        let switched = read_response(&mut reader).expect("read");
+        assert_eq!(switched.status, 101);
+        assert_eq!(reader, b"\x81\x00");
+    }
+
+    #[test]
+    fn a_server_that_never_ends_its_interim_answers_is_refused() {
+        let continued = "HTTP/1.1 100 Continue\r\n\r\n";
+        let last = "HTTP/1.1 204 No Content\r\n\r\n";
+        let within = format!("{}{last}", continued.repeat(MAX_INTERIM));
+        assert_eq!(answer(within.as_bytes()).expect("read").status, 204);
+        let past = format!("{}{last}", continued.repeat(MAX_INTERIM + 1));
+        assert!(answer(past.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn a_request_refused_is_answered_400_and_a_broken_connection_not_at_all() {
+        let apart = &b"POST / HTTP/1.1\r\nContent-Length : 3\r\n\r\nabc"[..];
+        let mut connection = BufReader::new(wire(apart));
+        read_request_or_refuse(&mut connection).expect_err("whitespace before the colon");
+        let back = answer(&connection.into_inner().written).expect("an answer");
+        assert_eq!(back.status, 400);
+        assert_eq!(back.header_value("connection"), Some("close"));
+        let good = &b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"[..];
+        let mut connection = BufReader::new(wire(good));
+        let read = read_request_or_refuse(&mut connection).expect("read");
+        assert_eq!(read.expect("one").path, "/");
+        assert_eq!(
+            connection.into_inner().written,
+            b"",
+            "nothing to answer yet"
+        );
+        let broken = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+        let mut written = Vec::new();
+        refuse(&mut written, &NetError::from_io("reading", &broken));
+        assert_eq!(written, b"", "nothing reaches a broken connection");
     }
 }
