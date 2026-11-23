@@ -6,7 +6,7 @@
 //! [`crate::MAX_BODY`] where the protocol states none — and so is the
 //! phrase that says what carries it. The refusal is one sentence
 //! everywhere, `codec::ceiling`'s: every technology's send, encoder and
-//! loopback, the Essentials, the HTTP body and [`crate::read`] take it
+//! loopback, the System Tests, the HTTP body and [`crate::read`] take it
 //! here as the network's failure.
 
 use crate::NetError;
