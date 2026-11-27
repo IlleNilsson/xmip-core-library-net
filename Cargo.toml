@@ -1,8 +1,8 @@
 [package]
 name = "xmip-core-library-net"
-version = "0.1.0"
-edition = "2024"
-license = "AGPL-3.0-or-later"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 repository = "https://github.com/IlleNilsson/xmip-core-library-net"
 description = "Network primitives the capabilities share, one copy of each: an address, a URI's authority, path and endpoint, a network in prefix notation, a MAC address, the one TCP connect, a line-oriented head, HTTP/1.1 and HTTP/2 with HPACK, both halves, the one named pipe, Linux's IEEE 802.15.4 socket, and JSON-RPC 2.0, both framings."
 
