@@ -28,6 +28,8 @@
 //! ([`login`]); JSON-RPC 2.0, its messages and both its framings, by a
 //! `Content-Length` header and one message a line (`rpc`, the `rpc` feature); on Windows, the one wait for an overlapped operation every
 //! call into Windows here and a serial port's take (`system::overlapped`);
+//! an IEEE 802.15.4 interface of Linux's kernel, the one radio Thread,
+//! Zigbee and `WirelessHART` reach ([`ieee802154`]);
 //! and, for tests
 //! alone, a loopback address no one holds (`fixture`, `test-support`).
 //!
@@ -60,6 +62,7 @@ pub mod grpc;
 pub mod head;
 pub mod http;
 pub mod http2;
+pub mod ieee802154;
 pub mod login;
 pub mod mac;
 mod network;
@@ -70,7 +73,7 @@ pub mod reply;
 pub mod rpc;
 #[cfg(unix)]
 pub mod socket_file;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub mod system;
 mod target;
 pub mod uri;

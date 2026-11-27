@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/IlleNilsson/xmip-core-library-net"
-description = "Network primitives the capabilities share, one copy of each: an address, a URI's authority, path and endpoint, a network in prefix notation, a MAC address, the one TCP connect, a line-oriented head, HTTP/1.1 and HTTP/2 with HPACK, both halves, the named pipe the named pipe transport and the local endpoint share, and JSON-RPC 2.0, both framings."
+description = "Network primitives the capabilities share, one copy of each: an address, a URI's authority, path and endpoint, a network in prefix notation, a MAC address, the one TCP connect, a line-oriented head, HTTP/1.1 and HTTP/2 with HPACK, both halves, the one named pipe, Linux's IEEE 802.15.4 socket, and JSON-RPC 2.0, both framings."
 
 [lib]
 path = "src/lib.rs"
@@ -33,6 +33,13 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Network
 # not make; `nix` makes it with a safe call.
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", default-features = false, features = ["fs"] }
+
+# An IEEE 802.15.4 interface's socket (`ieee802154`; ADR-0050, amendment
+# 2026-11-27): `AF_IEEE802154`, its socket address, `SIOCGIFADDR`, `poll`
+# and the calls on it, made in `system/ieee802154.rs`, since no crate here
+# lays out an 802.15.4 socket address without an unsafe constructor.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 
 [features]
 # A loopback address no one holds (`fixture`), the estate's one for every
@@ -66,11 +73,12 @@ xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core
 file = { package = "xmip-core-library-file", git = "https://github.com/IlleNilsson/xmip-core-library-file", branch = "main", features = ["test-support"] }
 
 [lints.rust]
-# deny, not forbid: the crate's calls to Windows — the named pipe's and the
-# TCP connect's — cross a C interface in one folder, `src/system/`, each
-# file lowering this at its top (ADR-0050, amendments 2026-10-21 and
-# 2026-11-14; `test/Unsafe.Test.ps1` holds the folder). Every other file of
-# the crate writes no unsafe code.
+# deny, not forbid: the crate's calls to the operating system — Windows'
+# named pipe and TCP connect, Linux's IEEE 802.15.4 socket — cross a C
+# interface in one folder, `src/system/`, each file lowering this at its
+# top (ADR-0050, amendments 2026-10-21, 2026-11-14 and 2026-11-27;
+# `test/Unsafe.Test.ps1` holds the folder). Every other file of the crate
+# writes no unsafe code.
 unsafe_code = "deny"
 
 [lints.clippy]
