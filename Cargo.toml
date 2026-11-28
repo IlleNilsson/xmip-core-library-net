@@ -13,7 +13,7 @@ path = "src/lib.rs"
 # Hex, which a MAC address and a percent escape are both spelled in; and
 # the wide string the named pipe's paths, descriptor and names cross to
 # Windows as (`codec::wide`).
-codec ={ package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
+codec = { workspace = true }
 # JSON-RPC 2.0's messages are JSON values (`rpc`), so only a crate that
 # asks for the `rpc` feature links a JSON library.
 serde_json = { version = "1", optional = true }
@@ -68,9 +68,9 @@ test = false
 # The timing program's figure, the fastest of five over its rounds, read
 # once for the estate (`xcore::latency`). Test-only: what this library is
 # built out of stays Library (`test/Layer.Test.ps1` reads `[dependencies]`).
-xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main", features = ["test-support"] }
+xcore = { workspace = true, features = ["test-support"] }
 # A test's own temporary folder (`file::temporary`); for the tests only.
-file = { package = "xmip-core-library-file", git = "https://github.com/IlleNilsson/xmip-core-library-file", branch = "main", features = ["test-support"] }
+file = { workspace = true, features = ["test-support"] }
 
 [lints.rust]
 # deny, not forbid: the crate's calls to the operating system — Windows'
